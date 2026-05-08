@@ -7,8 +7,22 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath
+from PyQt6.QtCore import (
+    QEasingCurve,
+    QPropertyAnimation,
+    QRect,
+    Qt,
+    QTimer,
+    pyqtProperty,
+)
+from PyQt6.QtGui import (
+    QColor,
+    QFont,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QRadialGradient,
+)
 from PyQt6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -17,6 +31,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -94,6 +109,152 @@ QListWidget::item:selected {{
     color: {WHITE};
 }}
 """
+
+
+class BigModeSwitch(QWidget):
+    """A two-segment privacy switch that's the centerpiece of the home
+    screen. Active half is bright cyan with a glowing rim and a giant
+    label; inactive half is dim and muted. Clicking either half flips
+    the mode. Replaces the small toggle TJ called "altbacken" + the
+    confusing dual-dropdown layout below it.
+    """
+
+    HEIGHT = 110
+    HALF_RADIUS = 22
+
+    def __init__(self, is_local: bool, on_change) -> None:
+        super().__init__()
+        self._is_local = is_local
+        self._on_change = on_change  # callable(checked: bool)
+        self._indicator_pos = 0.0  # 0 = left half active, 1 = right half active
+        self._indicator_pos = 0.0 if is_local else 1.0
+        self._hovered_half = -1  # -1 none, 0 local, 1 cloud
+
+        self.setMinimumHeight(self.HEIGHT)
+        self.setMaximumHeight(self.HEIGHT)
+        self.setMouseTracking(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self._anim = QPropertyAnimation(self, b"indicator")
+        self._anim.setDuration(280)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    # Property used by the slide animation
+    def get_indicator(self) -> float:
+        return self._indicator_pos
+
+    def set_indicator(self, v: float) -> None:
+        self._indicator_pos = v
+        self.update()
+
+    indicator = pyqtProperty(float, get_indicator, set_indicator)
+
+    def set_local(self, is_local: bool) -> None:
+        if self._is_local == is_local:
+            return
+        self._is_local = is_local
+        self._anim.stop()
+        self._anim.setStartValue(self._indicator_pos)
+        self._anim.setEndValue(0.0 if is_local else 1.0)
+        self._anim.start()
+
+    def is_local(self) -> bool:
+        return self._is_local
+
+    # ── mouse ──────────────────────────────────────────────────────────────
+
+    def mousePressEvent(self, e) -> None:
+        half_w = self.width() / 2
+        new_local = e.position().x() < half_w
+        if new_local != self._is_local:
+            self.set_local(new_local)
+            self._on_change(new_local)
+
+    def mouseMoveEvent(self, e) -> None:
+        half_w = self.width() / 2
+        h = 0 if e.position().x() < half_w else 1
+        if h != self._hovered_half:
+            self._hovered_half = h
+            self.update()
+        super().mouseMoveEvent(e)
+
+    def leaveEvent(self, _e) -> None:
+        if self._hovered_half != -1:
+            self._hovered_half = -1
+            self.update()
+
+    # ── paint ──────────────────────────────────────────────────────────────
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = self.rect().adjusted(2, 2, -2, -2)
+
+        # Outer card
+        path = QPainterPath()
+        path.addRoundedRect(rect.toRectF(), self.HALF_RADIUS, self.HALF_RADIUS)
+        p.fillPath(path, QColor(NIGHT_2))
+        p.setPen(QPen(QColor(NIGHT_BORDER), 1.0))
+        p.drawPath(path)
+
+        # Sliding active-indicator pill
+        half_w = rect.width() / 2
+        ind_x = rect.x() + 6 + int(self._indicator_pos * (half_w - 6))
+        ind_w = int(half_w - 12)
+        ind_rect = QRect(ind_x, rect.y() + 6, ind_w, rect.height() - 12)
+        ind_color = QColor(CYAN) if self._is_local else QColor("#5b8fb6")
+        # active-side glow halo behind the pill
+        for r in range(8, 0, -2):
+            halo = QColor(ind_color)
+            halo.setAlpha(20)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(halo)
+            p.drawRoundedRect(
+                ind_rect.adjusted(-r, -r, r, r),
+                self.HALF_RADIUS + r, self.HALF_RADIUS + r,
+            )
+        p.setBrush(ind_color)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(ind_rect, self.HALF_RADIUS - 4, self.HALF_RADIUS - 4)
+
+        # Labels
+        f_big = QFont()
+        f_big.setPointSize(14)
+        f_big.setWeight(QFont.Weight.Bold)
+        f_sub = QFont()
+        f_sub.setPointSize(8)
+        f_sub.setWeight(QFont.Weight.Medium)
+
+        for i, (icon, big, sub) in enumerate([
+            ("🔒", "100% PRIVATE", "Audio never leaves this device"),
+            ("☁", "CLOUD", "DSGVO • EU-Server • Subunit"),
+        ]):
+            half_x = rect.x() + i * half_w
+            is_active = (i == 0 and self._is_local) or (i == 1 and not self._is_local)
+            p.setPen(NIGHT if is_active else QColor(WHITE_DIM))
+            f_icon = QFont()
+            f_icon.setPointSize(20)
+            p.setFont(f_icon)
+            p.drawText(
+                QRect(int(half_x), rect.y() + 14, int(half_w), 26),
+                int(Qt.AlignmentFlag.AlignCenter),
+                icon,
+            )
+            p.setFont(f_big)
+            p.drawText(
+                QRect(int(half_x), rect.y() + 42, int(half_w), 24),
+                int(Qt.AlignmentFlag.AlignCenter),
+                big,
+            )
+            p.setPen(NIGHT if is_active else QColor(WHITE_DIM))
+            p.setFont(f_sub)
+            p.drawText(
+                QRect(int(half_x), rect.y() + 68, int(half_w), 24),
+                int(Qt.AlignmentFlag.AlignCenter),
+                sub,
+            )
 
 
 def _format_seconds(s: float) -> str:
@@ -174,49 +335,35 @@ class MainWindow(QMainWindow):
         stats_row.addWidget(self.stat_saved)
         outer.addLayout(stats_row)
 
-        # ── Quick controls card ────────────────────────────────────────────
-        ctrl = self._make_card()
-        ctrl_l = QVBoxLayout(ctrl)
-        ctrl_l.setContentsMargins(18, 16, 18, 16)
-        ctrl_l.setSpacing(10)
-
-        ctrl_title = QLabel("Quick controls")
-        ctrl_title.setObjectName("h2")
-        ctrl_l.addWidget(ctrl_title)
-
-        # Row 1: big "Process locally" toggle. Default-on = highest privacy,
-        # no data leaves the machine. When OFF, the cloud-provider picker
-        # in Row 2 becomes active.
-        local_row = QHBoxLayout()
-        local_row.setSpacing(12)
-        local_text = QVBoxLayout()
-        local_text.setSpacing(2)
-        local_title = QLabel("Process locally")
-        local_title.setStyleSheet(f"color: {WHITE}; font-weight: 600;")
-        local_text.addWidget(local_title)
-        local_hint = QLabel(
-            "Highest privacy — audio never leaves your machine. "
-            "Disable to use a cloud provider instead."
+        # ── BIG Privacy-Hero Switch ────────────────────────────────────────
+        # TJ-feedback: the local/cloud choice is THE primary decision. Make
+        # it impossible to miss — a giant 2-segment switch with the active
+        # half lit up, the inactive one dim. Below it, a single contextual
+        # detail card that morphs to show the active mode's settings.
+        self.mode_switch = BigModeSwitch(
+            is_local=(config.mode == "local"),
+            on_change=self._on_local_toggled,
         )
-        local_hint.setObjectName("dim")
-        local_hint.setWordWrap(True)
-        local_text.addWidget(local_hint)
-        local_row.addLayout(local_text, 1)
-        self.local_toggle = AnimatedToggle(checked=(config.mode == "local"))
-        self.local_toggle.toggled.connect(self._on_local_toggled)
-        local_row.addWidget(self.local_toggle, 0, Qt.AlignmentFlag.AlignTop)
-        ctrl_l.addLayout(local_row)
+        outer.addWidget(self.mode_switch)
 
-        # Row 1b: local-model picker — only meaningful while the toggle is on.
-        # Lives in Quick Controls (not Settings) because TJ uses it constantly.
+        # Detail card — below the hero. Shows local model when local active,
+        # cloud provider when cloud active. Replaces the dual-dropdown layout
+        # that confused TJ ("man klickt drauf und das funktioniert nicht").
         hw = _hw.detect()
         recommended = _hw.recommend_local_model(hw)
-        model_row = QHBoxLayout()
-        model_row.setSpacing(10)
-        model_row.setContentsMargins(0, 0, 0, 0)
-        self.local_model_lbl = QLabel("Local model")
-        self.local_model_lbl.setObjectName("dim")
-        model_row.addWidget(self.local_model_lbl)
+        self._hw_summary = _hw.describe(hw)
+        self._recommended_model = recommended
+
+        self.detail_card = QFrame()
+        self.detail_card.setObjectName("card")
+        self._detail_layout = QHBoxLayout(self.detail_card)
+        self._detail_layout.setContentsMargins(18, 14, 18, 14)
+        self._detail_layout.setSpacing(12)
+        outer.addWidget(self.detail_card)
+
+        # Hidden combos: kept around for backwards-compat with any code that
+        # still calls refresh_mode(); the user interacts with the visible
+        # cards above which open compact pickers on click.
         self.local_model_combo = QComboBox()
         for m in LOCAL_MODELS:
             label = m
@@ -227,42 +374,31 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             self.local_model_combo.setCurrentIndex(idx)
         self.local_model_combo.currentIndexChanged.connect(self._on_local_model_changed)
-        model_row.addWidget(self.local_model_combo)
-        model_row.addStretch()
-        hw_summary = QLabel(_hw.describe(hw))
-        hw_summary.setObjectName("dim")
-        model_row.addWidget(hw_summary)
-        ctrl_l.addLayout(model_row)
+        self.local_model_combo.hide()
 
-        # Row 2: cloud-provider picker — only enabled when local toggle is off.
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        row.addWidget(QLabel("Cloud provider"))
         self.mode_combo = QComboBox()
         for mode_id in CLOUD_MODES:
             label = mode_label(mode_id)
             if mode_id == "subunit":
                 label += "  ·  Recommended"
             self.mode_combo.addItem(label, mode_id)
-        # If config.mode is local, fall back to last_cloud_mode for the picker.
         cloud_mode = config.mode if config.mode in CLOUD_MODES else config.last_cloud_mode
         idx = self.mode_combo.findData(cloud_mode)
         if idx >= 0:
             self.mode_combo.setCurrentIndex(idx)
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        row.addWidget(self.mode_combo)
-        row.addStretch()
-        hotkey_lbl = QLabel(f"Hotkey: {config.hotkey}")
-        hotkey_lbl.setObjectName("dim")
-        self.hotkey_lbl = hotkey_lbl
-        row.addWidget(hotkey_lbl)
-        ctrl_l.addLayout(row)
-        # Apply initial enabled state — exactly one of the two pickers is live.
-        self.mode_combo.setEnabled(config.mode != "local")
-        self.local_model_combo.setEnabled(config.mode == "local")
-        self.local_model_lbl.setEnabled(config.mode == "local")
+        self.mode_combo.hide()
 
-        outer.addWidget(ctrl)
+        # Hotkey label sits below the detail card, dim, single-line
+        hotkey_row = QHBoxLayout()
+        hotkey_row.setContentsMargins(4, 0, 4, 0)
+        hotkey_row.addStretch()
+        self.hotkey_lbl = QLabel(f"Hotkey: {config.hotkey}")
+        self.hotkey_lbl.setObjectName("dim")
+        hotkey_row.addWidget(self.hotkey_lbl)
+        outer.addLayout(hotkey_row)
+
+        self._refresh_detail_card()
 
         # ── Recent transcriptions ──────────────────────────────────────────
         recent_title = QLabel("Recent transcriptions")
@@ -309,30 +445,120 @@ class MainWindow(QMainWindow):
         return
 
     def refresh_mode(self) -> None:
-        """Re-sync toggle/combos with config (after Settings dialog applied)."""
+        """Re-sync UI with config (after Settings dialog applied)."""
         is_local = self.config.mode == "local"
-        # Local toggle
-        if self.local_toggle.isChecked() != is_local:
-            self.local_toggle.blockSignals(True)
-            self.local_toggle.setChecked(is_local)
-            self.local_toggle.blockSignals(False)
-        # Cloud-mode combo (only when not local)
+        self.mode_switch.set_local(is_local)
+        # Hidden combos kept in sync for refresh_mode contract
         target_cloud = self.config.mode if self.config.mode in CLOUD_MODES else self.config.last_cloud_mode
         c_idx = self.mode_combo.findData(target_cloud)
         if c_idx >= 0 and c_idx != self.mode_combo.currentIndex():
             self.mode_combo.blockSignals(True)
             self.mode_combo.setCurrentIndex(c_idx)
             self.mode_combo.blockSignals(False)
-        # Local-model combo
         m_idx = self.local_model_combo.findData(self.config.local_model)
         if m_idx >= 0 and m_idx != self.local_model_combo.currentIndex():
             self.local_model_combo.blockSignals(True)
             self.local_model_combo.setCurrentIndex(m_idx)
             self.local_model_combo.blockSignals(False)
-        # Enabled state
-        self.mode_combo.setEnabled(not is_local)
-        self.local_model_combo.setEnabled(is_local)
-        self.local_model_lbl.setEnabled(is_local)
+        self._refresh_detail_card()
+
+    def _refresh_detail_card(self) -> None:
+        """Rebuild the contextual detail card under the hero switch.
+        Local mode → model picker. Cloud mode → provider picker. Both as
+        click-to-open chips so the user has clear visual targets instead
+        of a dropdown that's mysteriously disabled half the time.
+        """
+        # Wipe the layout
+        while self._detail_layout.count():
+            item = self._detail_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        if self.config.mode == "local":
+            self._build_local_detail()
+        else:
+            self._build_cloud_detail()
+
+    def _build_local_detail(self) -> None:
+        # Title block
+        title_box = QVBoxLayout()
+        title_box.setSpacing(2)
+        t = QLabel("Local model")
+        t.setObjectName("h2")
+        title_box.addWidget(t)
+        sub = QLabel(self._hw_summary)
+        sub.setObjectName("dim")
+        title_box.addWidget(sub)
+        self._detail_layout.addLayout(title_box, 1)
+
+        # Current selection chip (click → open menu)
+        chip = QPushButton(self.config.local_model)
+        chip.setObjectName("primary")
+        chip.setMinimumWidth(160)
+        chip.setCursor(Qt.CursorShape.PointingHandCursor)
+        chip.clicked.connect(lambda: self._popup_local_model_menu(chip))
+        self._detail_layout.addWidget(chip, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def _build_cloud_detail(self) -> None:
+        title_box = QVBoxLayout()
+        title_box.setSpacing(2)
+        t = QLabel("Cloud provider")
+        t.setObjectName("h2")
+        title_box.addWidget(t)
+        sub = QLabel("Routed to your chosen API")
+        sub.setObjectName("dim")
+        title_box.addWidget(sub)
+        self._detail_layout.addLayout(title_box, 1)
+
+        cur = self.config.mode
+        chip_label = mode_label(cur).split("·")[0].strip()
+        chip = QPushButton(chip_label)
+        chip.setObjectName("primary")
+        chip.setMinimumWidth(180)
+        chip.setCursor(Qt.CursorShape.PointingHandCursor)
+        chip.clicked.connect(lambda: self._popup_cloud_menu(chip))
+        self._detail_layout.addWidget(chip, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def _popup_local_model_menu(self, anchor: QPushButton) -> None:
+        menu = QMenu(self)
+        for m in LOCAL_MODELS:
+            label = m
+            if m == self._recommended_model:
+                label += "  ⭐"
+            act = menu.addAction(label)
+            act.setCheckable(True)
+            if m == self.config.local_model:
+                act.setChecked(True)
+
+            def _pick(_=None, mm=m):
+                self.config.local_model = mm
+                self.config.save()
+                if self.config.mode == "local":
+                    self._on_change_mode("local")  # invalidate transcriber cache
+                self._refresh_detail_card()
+
+            act.triggered.connect(_pick)
+        menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+
+    def _popup_cloud_menu(self, anchor: QPushButton) -> None:
+        menu = QMenu(self)
+        for mode_id in CLOUD_MODES:
+            label = mode_label(mode_id).split("·")[0].strip()
+            if mode_id == "subunit":
+                label += "   ⭐"
+            act = menu.addAction(label)
+            act.setCheckable(True)
+            if mode_id == self.config.mode:
+                act.setChecked(True)
+
+            def _pick(_=None, mm=mode_id):
+                self.config.last_cloud_mode = mm
+                self._on_change_mode(mm)
+                self._refresh_detail_card()
+
+            act.triggered.connect(_pick)
+        menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
 
     def refresh(self) -> None:
         self.stat_count.findChild(QLabel, "value").setText(
@@ -372,14 +598,12 @@ class MainWindow(QMainWindow):
             self._on_change_mode(m)
 
     def _on_local_toggled(self, checked: bool) -> None:
-        self.mode_combo.setEnabled(not checked)
-        self.local_model_combo.setEnabled(checked)
-        self.local_model_lbl.setEnabled(checked)
         if checked:
             self._on_change_mode("local")
         else:
             target = self.mode_combo.currentData() or self.config.last_cloud_mode or "subunit"
             self._on_change_mode(target)
+        self._refresh_detail_card()
 
     def _on_local_model_changed(self, _idx: int) -> None:
         m = self.local_model_combo.currentData()

@@ -29,11 +29,12 @@ class MicLevelMeter(QWidget):
 
     BAR_HEIGHT = 22
     SAMPLE_RATE = 16000
-    BLOCK_SIZE = 512
+    BLOCK_SIZE = 1024
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self._level = 0.0
+        self._level = 0.0           # raw most-recent block RMS
+        self._level_smooth = 0.0    # painted bar value (lags raw → less twitchy)
         self._peak = 0.0
         self._stream: Optional[sd.InputStream] = None
         self._device: Optional[int] = None
@@ -71,9 +72,11 @@ class MicLevelMeter(QWidget):
     # ── Audio plumbing ─────────────────────────────────────────────────────
 
     def _audio_cb(self, indata, _frames, _time, _status) -> None:
-        # Fast RMS → 0..1 with a soft cap; smoothing happens in _on_tick.
+        # Fast RMS → 0..1 with a softer cap (4x boost vs 6x). Smoothing
+        # happens in _on_tick so the painted bar doesn't twitch on
+        # every block.
         rms = float(np.sqrt(np.mean(indata.astype(np.float32) ** 2)))
-        self._level = min(1.0, rms * 6.0)
+        self._level = min(1.0, rms * 4.0)
 
     def _restart_stream(self) -> None:
         self._stop_stream()
@@ -111,11 +114,21 @@ class MicLevelMeter(QWidget):
     # ── Render ─────────────────────────────────────────────────────────────
 
     def _on_tick(self) -> None:
-        # Decay peak with a short tail for a natural feel
-        if self._level > self._peak:
-            self._peak = self._level
+        # Smooth the painted level (low-pass) so the bar moves like a
+        # real VU meter instead of jittering on every block.
+        # Asymmetric: faster on attack so onsets feel responsive.
+        attack = 0.45
+        release = 0.12
+        if self._level > self._level_smooth:
+            self._level_smooth += (self._level - self._level_smooth) * attack
         else:
-            self._peak = max(self._level, self._peak - 0.04)
+            self._level_smooth += (self._level - self._level_smooth) * release
+
+        # Peak hold with a long tail so the marker is readable.
+        if self._level_smooth > self._peak:
+            self._peak = self._level_smooth
+        else:
+            self._peak = max(self._level_smooth, self._peak - 0.012)
         self.update()
 
     def paintEvent(self, _e) -> None:
@@ -128,11 +141,11 @@ class MicLevelMeter(QWidget):
         p.setPen(NIGHT_BORDER)
         p.drawRoundedRect(self.rect(), radius, radius)
 
-        # Filled bar
-        fill_w = int((self.width() - 4) * min(1.0, self._level))
+        # Filled bar — use the smoothed value, not the raw one
+        fill_w = int((self.width() - 4) * min(1.0, self._level_smooth))
         if fill_w > 0:
-            color = RED if self._level > 0.85 else (
-                CYAN if self._level > 0.4 else GREEN
+            color = RED if self._level_smooth > 0.85 else (
+                CYAN if self._level_smooth > 0.4 else GREEN
             )
             p.setBrush(color)
             p.setPen(Qt.PenStyle.NoPen)

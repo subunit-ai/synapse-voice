@@ -11,7 +11,7 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 
 @dataclass
 class Config:
-    hotkey: str = "<ctrl>+<shift>+<space>"
+    hotkey: str = "<ctrl>+<space>"
     # mode: "local" | "subunit" | "openai" | "groq" | "custom"
     mode: str = "local"
     local_model: str = "base"  # base | small | medium | large-v3
@@ -64,8 +64,10 @@ class Config:
     cleanup_enabled: bool = False
     cleanup_style: str = "tidy"  # tidy | formal
 
-    # v0.3.0: Recording mode
-    recording_mode: str = "toggle"  # toggle | hold
+    # v0.3.0: Recording mode. Default = hold (Push-to-Talk) since TJ
+    # confirmed Voicely's default works better — press-and-hold maps
+    # naturally to "I'm dictating right now".
+    recording_mode: str = "hold"  # toggle | hold
 
     # v0.3.0: Account (subunit-server side)
     account_email: str = ""

@@ -1,6 +1,8 @@
 """Settings dialog — v0.2.5 redesign with tabs + animated toggles + brand polish."""
 from __future__ import annotations
 
+from typing import Optional
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QDesktopServices, QFont
 from PyQt6.QtCore import QUrl
@@ -141,35 +143,56 @@ def _hint(text: str) -> QLabel:
 
 
 class _ToggleRow(QWidget):
-    """Label + animated toggle in a horizontal row."""
+    """Label + animated toggle in a horizontal row.
+
+    Sizes itself to the hint label's wrapped height so a 2-line hint
+    doesn't get clipped by the row above (the v0.3.10 "Behaviour" cutoff
+    bug TJ flagged was the QSizePolicy.MinimumExpanding fallback being
+    miscomputed before word-wrap had run).
+    """
 
     def __init__(self, label: str, hint: str, checked: bool) -> None:
         from PyQt6.QtWidgets import QSizePolicy
 
         super().__init__()
-        # Force the row to size itself based on its layout contents — without
-        # this Qt sometimes collapses the row to one line and overlaps the
-        # hint with the next row's title.
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+        )
 
         h = QHBoxLayout(self)
-        h.setContentsMargins(0, 6, 0, 6)
+        h.setContentsMargins(0, 4, 0, 4)
         h.setSpacing(12)
         text_box = QVBoxLayout()
-        text_box.setSpacing(3)
+        text_box.setSpacing(2)
         title = QLabel(label)
         title.setStyleSheet(f"color: {WHITE}; font-weight: 500;")
         title.setWordWrap(False)
         text_box.addWidget(title)
+        self._hint_lbl: Optional[QLabel] = None
         if hint:
             hint_lbl = _hint(hint)
+            hint_lbl.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding
+            )
             text_box.addWidget(hint_lbl)
+            self._hint_lbl = hint_lbl
         h.addLayout(text_box, 1)
         self.toggle = AnimatedToggle(checked=checked)
         h.addWidget(self.toggle, 0, Qt.AlignmentFlag.AlignTop)
 
     def is_on(self) -> bool:
         return self.toggle.isChecked()
+
+    def resizeEvent(self, e) -> None:
+        # Re-pin the row's minimum height after a width change so a wrapped
+        # hint never clips into the next row.
+        super().resizeEvent(e)
+        if self._hint_lbl is not None:
+            available_w = max(100, self.width() - 70)  # toggle + spacing
+            wrapped_h = self._hint_lbl.heightForWidth(available_w)
+            if wrapped_h > 0:
+                # title (~18) + spacing (2) + hint + margins (8)
+                self.setMinimumHeight(18 + 2 + wrapped_h + 8)
 
 
 class SettingsDialog(QDialog):
