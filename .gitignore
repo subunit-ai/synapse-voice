@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.eggs/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Logs / runtime
+*.log
+*.pid
+
+# Test artefacts
+tests/shots/*.png
+htmlcov/
+.coverage
+.pytest_cache/
+
+# Local config (user-specific)
+config.local.json
+
+# Whisper model caches
+models/
+*.bin
+*.pt

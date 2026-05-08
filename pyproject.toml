@@ -1,0 +1,25 @@
+[project]
+name = "synapse-voice"
+version = "0.1.0"
+description = "Hotkey-driven speech-to-text for the subunit ecosystem"
+requires-python = ">=3.10"
+authors = [{ name = "subunit", email = "u1@subunit.ai" }]
+dependencies = [
+    "PyQt6>=6.6",
+    "sounddevice>=0.4",
+    "numpy>=1.26",
+    "scipy>=1.12",
+    "pynput>=1.7",
+    "requests>=2.31",
+    "faster-whisper>=1.0",
+]
+
+[project.scripts]
+synapse-voice = "synapse_voice.main:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["synapse_voice*"]

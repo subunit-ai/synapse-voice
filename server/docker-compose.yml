@@ -1,0 +1,30 @@
+# transcribe.subunit.ai service — append/merge into ~/subunit/subunit-engine/docker-compose.yml
+# (or run standalone for testing: docker compose -f server/docker-compose.yml up)
+
+services:
+  transcribe-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: transcribe-api
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - WHISPER_MODEL=large-v3-turbo
+      - WHISPER_DEVICE=auto
+      - TRANSCRIBE_API_KEY=${TRANSCRIBE_API_KEY:-}
+      - NVIDIA_VISIBLE_DEVICES=all
+    ports:
+      - "127.0.0.1:8005:8005"
+    networks:
+      - subunit-network
+
+networks:
+  subunit-network:
+    external: true
