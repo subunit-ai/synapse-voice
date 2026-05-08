@@ -54,8 +54,14 @@ StartupNotify=false
 EOF
 cp "$APPDIR/synapse-voice.desktop" "$APPDIR/usr/share/applications/"
 
-# Icon — generate a simple cyan circle PNG via Python (uses venv to get PyQt6)
-"$ROOT/.venv/bin/python" - <<'PY'
+# Icon — generate a simple cyan circle PNG via Python.
+# Prefer .venv if it exists (local dev), otherwise fall back to system python (CI).
+if [[ -x "$ROOT/.venv/bin/python" ]]; then
+    PYTHON_BIN="$ROOT/.venv/bin/python"
+else
+    PYTHON_BIN="$(command -v python3 || command -v python)"
+fi
+"$PYTHON_BIN" - <<'PY'
 from pathlib import Path
 try:
     from PyQt6.QtCore import Qt
@@ -83,7 +89,8 @@ except Exception as e:
 PY
 
 cd dist
-ARCH=x86_64 "$APPIMAGETOOL" SynapseVoice.AppDir SynapseVoice-x86_64.AppImage
+# --appimage-extract-and-run: avoid FUSE dependency (works in containers / GH Actions)
+ARCH=x86_64 "$APPIMAGETOOL" --appimage-extract-and-run SynapseVoice.AppDir SynapseVoice-x86_64.AppImage
 chmod +x SynapseVoice-x86_64.AppImage
 size=$(du -h SynapseVoice-x86_64.AppImage | cut -f1)
 cd "$ROOT"
