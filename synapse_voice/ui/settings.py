@@ -185,7 +185,7 @@ class SettingsDialog(QDialog):
         # Header with brand
         head = QHBoxLayout()
         head.setSpacing(14)
-        head.addWidget(BrandLogo(size=42))
+        head.addWidget(BrandLogo(size=52))
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
         h1 = QLabel("Settings")

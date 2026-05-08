@@ -135,7 +135,7 @@ class MainWindow(QMainWindow):
         # ── Header ─────────────────────────────────────────────────────────
         header = QHBoxLayout()
         header.setSpacing(14)
-        header.addWidget(BrandLogo(size=44))
+        header.addWidget(BrandLogo(size=56))
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
         title = QLabel("Synapse Voice")

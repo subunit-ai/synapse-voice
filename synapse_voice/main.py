@@ -211,6 +211,12 @@ class SynapseVoiceApp(QObject):
             self.bubble.show_state("error", "empty transcription", auto_hide_ms=2500)
             return
         if self.config.autopaste:
+            # Hide the bubble BEFORE paste so it doesn't steal focus from the
+            # target window. The Tool + WA_ShowWithoutActivating flags help on
+            # Linux but not always on Windows 11 — there the bubble being on
+            # top can still interfere with our SetForegroundWindow + Ctrl+V.
+            if self.config.show_bubble and self.bubble.isVisible():
+                self.bubble.hide()
             _ok, mode = paste_into(self.target, text)
         else:
             from .target_lock import set_clipboard

@@ -134,9 +134,14 @@ def _win_focus(hwnd: int) -> bool:
 
     # Give Windows time to repaint + transfer focus.
     time.sleep(0.15)
+    if user32.GetForegroundWindow() == hwnd:
+        return True
 
-    # Verify: did the focus actually land where we wanted? If yes → success
-    # regardless of what SetForegroundWindow's return code claimed.
+    # Retry once with a longer settle window — slow systems sometimes need
+    # 200-300ms before SetForegroundWindow visibly applies.
+    user32.BringWindowToTop(hwnd)
+    user32.SetForegroundWindow(hwnd)
+    time.sleep(0.3)
     if user32.GetForegroundWindow() == hwnd:
         return True
     return ok
@@ -310,5 +315,37 @@ def paste_into(target: WindowTarget | None, text: str) -> tuple[bool, str]:
     if not focus_window(target):
         return True, "clipboard"
     if not paste_keystroke():
+        # Fallback: try WM_PASTE directly to the target HWND (Win only).
+        # Works for native EDIT/RICHEDIT controls even when SendInput Ctrl+V
+        # gets eaten by some focus-policy quirk. Doesn't work for Electron /
+        # Chrome embeds, but those usually accept SendInput just fine.
+        if target.platform == "win32" and _win_post_paste(int(target.window_id)):
+            return True, "pasted"
         return True, "clipboard"
     return True, "pasted"
+
+
+def _win_post_paste(hwnd: int) -> bool:
+    """Send WM_PASTE directly to the target HWND.
+
+    `WM_PASTE = 0x0302` — handled natively by EDIT, RICHEDIT and any window
+    that subclasses them. Bypasses keyboard simulation entirely so it isn't
+    susceptible to focus-stealing or input-filter policies.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        WM_PASTE = 0x0302
+        user32 = ctypes.windll.user32
+        # Try sending to the focused child first — most edit controls live
+        # inside a parent window's HWND, but the focus might have landed on
+        # a specific child after our SetForegroundWindow call.
+        user32.GetFocus.restype = wintypes.HWND
+        focus = user32.GetFocus()
+        if focus:
+            user32.PostMessageW(focus, WM_PASTE, 0, 0)
+        user32.PostMessageW(hwnd, WM_PASTE, 0, 0)
+        return True
+    except Exception:
+        return False

@@ -134,15 +134,18 @@ class BrandLogo(QWidget):
         self._pixmap: Optional[QPixmap] = self._load_pixmap()
 
     def _load_pixmap(self) -> Optional[QPixmap]:
-        # Look for the logo bundled with the app.
+        # Look for the logo bundled with the app. Pre-scale at 2x the display
+        # size for crisp rendering on hi-DPI screens (Qt's drawPixmap then
+        # downsamples with SmoothPixmapTransform).
         candidates = _logo_candidates()
         for path in candidates:
             if path.exists():
                 pix = QPixmap(str(path))
                 if not pix.isNull():
+                    target = max(self._size * 2, 96)
                     return pix.scaled(
-                        self._size,
-                        self._size,
+                        target,
+                        target,
                         Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation,
                     )
@@ -151,6 +154,7 @@ class BrandLogo(QWidget):
     def paintEvent(self, _e: QPaintEvent) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         if self._pixmap is None:
             # Fallback: cyan filled diamond
             p.setPen(Qt.PenStyle.NoPen)
@@ -169,11 +173,10 @@ class BrandLogo(QWidget):
                 ])
             )
             return
-        # Tint a copy of the pixmap to the brand colour, then draw the result.
-        # Doing the composition on an off-screen pixmap (rather than directly
-        # on the widget) avoids the widget's opaque background interfering
-        # with the SourceIn composition.
-        p.drawPixmap(0, 0, _tint_pixmap(self._pixmap, self._color))
+        # Tint a copy of the high-res pixmap, then scale into the widget rect.
+        # Qt's SmoothPixmapTransform hint gives a crisper result than the
+        # pre-scaled approach because the pixmap is still oversampled here.
+        p.drawPixmap(self.rect(), _tint_pixmap(self._pixmap, self._color))
 
 
 def _tint_pixmap(src: QPixmap, color: QColor) -> QPixmap:
