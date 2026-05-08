@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .. import __version__, autostart
+from .. import account as _account_api
 from ..config import Config
 from ..logger import log_file_path
 from ..transcriber import ALL_MODES, mode_label
@@ -201,6 +202,7 @@ class SettingsDialog(QDialog):
 
         self.tabs.addTab(self._build_general_tab(), "General")
         self.tabs.addTab(self._build_transcription_tab(), "Transcription")
+        self.tabs.addTab(self._build_account_tab(), "Account")
         self.tabs.addTab(self._build_about_tab(), "About")
 
         # Buttons
@@ -262,6 +264,42 @@ class SettingsDialog(QDialog):
             autostart.is_enabled(),
         )
         layout.addWidget(self.row_autostart)
+
+        layout.addSpacing(6)
+        layout.addWidget(_section_title("Recording mode"))
+        self.recording_mode_combo = QComboBox()
+        self.recording_mode_combo.addItem("Toggle — press to start, press again to stop", "toggle")
+        self.recording_mode_combo.addItem("Hold — hold the hotkey, release to transcribe", "hold")
+        idx = self.recording_mode_combo.findData(self.config.recording_mode)
+        if idx >= 0:
+            self.recording_mode_combo.setCurrentIndex(idx)
+        layout.addWidget(self.recording_mode_combo)
+
+        layout.addSpacing(6)
+        layout.addWidget(_section_title("AI cleanup"))
+        self.row_cleanup = _ToggleRow(
+            "Clean up transcripts with AI",
+            "Removes filler words, fixes punctuation, closes half-finished sentences. "
+            "Routed through the subunit-server (extra ~0.5–1s).",
+            self.config.cleanup_enabled,
+        )
+        layout.addWidget(self.row_cleanup)
+        self.cleanup_style_combo = QComboBox()
+        self.cleanup_style_combo.addItem("Tidy — light cleanup, keep wording", "tidy")
+        self.cleanup_style_combo.addItem("Formal — rewrite into business tone", "formal")
+        idx = self.cleanup_style_combo.findData(self.config.cleanup_style)
+        if idx >= 0:
+            self.cleanup_style_combo.setCurrentIndex(idx)
+        layout.addWidget(self.cleanup_style_combo)
+
+        layout.addSpacing(6)
+        layout.addWidget(_section_title("Updates"))
+        self.row_auto_update = _ToggleRow(
+            "Check for updates on startup",
+            "Asks GitHub once per launch for a newer release.",
+            self.config.auto_update_check,
+        )
+        layout.addWidget(self.row_auto_update)
 
         layout.addStretch(1)
         return page
@@ -431,6 +469,107 @@ class SettingsDialog(QDialog):
         mode = self.mode_combo.currentData() or "local"
         self.provider_stack.setCurrentIndex(self._panel_index.get(mode, 0))
 
+    # ── Tab 3: Account ─────────────────────────────────────────────────────
+
+    def _build_account_tab(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("tabPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(2, 18, 2, 18)
+        layout.setSpacing(14)
+
+        layout.addWidget(_section_title("Subunit account"))
+
+        self.account_status_lbl = QLabel("")
+        self.account_status_lbl.setWordWrap(True)
+        layout.addWidget(self.account_status_lbl)
+
+        layout.addSpacing(6)
+        form = QFormLayout()
+        form.setSpacing(10)
+        self.account_email_edit = QLineEdit(self.config.account_email)
+        self.account_email_edit.setPlaceholderText("you@example.com")
+        form.addRow("Email", self.account_email_edit)
+        layout.addLayout(form)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        self.account_signin_btn = QPushButton("Sign in / Sign up")
+        self.account_signin_btn.setObjectName("primary")
+        self.account_signin_btn.clicked.connect(self._on_account_signin)
+        btn_row.addWidget(self.account_signin_btn)
+
+        self.account_logout_btn = QPushButton("Sign out")
+        self.account_logout_btn.clicked.connect(self._on_account_logout)
+        btn_row.addWidget(self.account_logout_btn)
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+
+        layout.addSpacing(8)
+        layout.addWidget(_hint(
+            "Sign-up provisions a Subunit API key tied to your email. "
+            "The key gets installed automatically — no manual copy-paste. "
+            "Same email twice returns the same key."
+        ))
+
+        layout.addStretch(1)
+        self._refresh_account_status()
+        return page
+
+    def _refresh_account_status(self) -> None:
+        if self.config.account_email and self.config.subunit_api_key:
+            self.account_status_lbl.setText(
+                f"<b>Signed in as</b> {self.config.account_email}"
+            )
+            self.account_signin_btn.setText("Refresh key")
+            self.account_logout_btn.setEnabled(True)
+        else:
+            self.account_status_lbl.setText(
+                "<b>Not signed in.</b>  Enter your email and click "
+                "“Sign in / Sign up” to get a Subunit API key automatically."
+            )
+            self.account_logout_btn.setEnabled(False)
+
+    def _on_account_signin(self) -> None:
+        from PyQt6.QtWidgets import QMessageBox
+
+        email = self.account_email_edit.text().strip()
+        if "@" not in email:
+            QMessageBox.warning(self, "Synapse Voice", "Please enter a valid email.")
+            return
+        endpoint = (
+            self.subunit_endpoint_edit.text().strip()
+            or self.config.subunit_endpoint
+        )
+        try:
+            acct = _account_api.sign_up(endpoint, email)
+        except Exception as e:
+            QMessageBox.critical(self, "Synapse Voice — sign-up failed", str(e))
+            return
+        # Persist immediately to config so the key is usable even if user clicks Cancel.
+        self.config.account_email = acct.email
+        self.config.subunit_api_key = acct.api_key
+        self.config.subunit_endpoint = endpoint
+        self.config.save()
+        # Reflect in the Transcription tab fields too.
+        self.subunit_key_edit.setText(acct.api_key)
+        self.subunit_endpoint_edit.setText(endpoint)
+        self._refresh_account_status()
+        msg = (
+            f"Welcome! Account created and key installed."
+            if acct.is_new
+            else f"Welcome back. Key refreshed."
+        )
+        QMessageBox.information(self, "Synapse Voice", msg)
+
+    def _on_account_logout(self) -> None:
+        self.config.account_email = ""
+        self.config.subunit_api_key = ""
+        self.config.save()
+        self.account_email_edit.setText("")
+        self.subunit_key_edit.setText("")
+        self._refresh_account_status()
+
     # ── Tab 3: About ───────────────────────────────────────────────────────
 
     def _build_about_tab(self) -> QWidget:
@@ -473,6 +612,10 @@ class SettingsDialog(QDialog):
         config.autopaste = self.row_autopaste.is_on()
         config.target_lock = self.row_target_lock.is_on()
         config.show_bubble = self.row_show_bubble.is_on()
+        config.recording_mode = self.recording_mode_combo.currentData() or "toggle"
+        config.cleanup_enabled = self.row_cleanup.is_on()
+        config.cleanup_style = self.cleanup_style_combo.currentData() or "tidy"
+        config.auto_update_check = self.row_auto_update.is_on()
 
         config.subunit_endpoint = (
             self.subunit_endpoint_edit.text().strip()

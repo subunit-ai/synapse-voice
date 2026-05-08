@@ -42,6 +42,20 @@ class Config:
     autopaste: bool = True
     target_lock: bool = True
     show_bubble: bool = True
+
+    # v0.3.0: AI cleanup layer
+    cleanup_enabled: bool = False
+    cleanup_style: str = "tidy"  # tidy | formal
+
+    # v0.3.0: Recording mode
+    recording_mode: str = "toggle"  # toggle | hold
+
+    # v0.3.0: Account (subunit-server side)
+    account_email: str = ""
+
+    # v0.3.0: Auto-update
+    auto_update_check: bool = True
+
     history_size: int = 50
     history: list[dict] = field(default_factory=list)
     # Stats

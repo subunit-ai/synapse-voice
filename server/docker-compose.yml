@@ -19,9 +19,14 @@ services:
       - WHISPER_MODEL=large-v3-turbo
       - WHISPER_DEVICE=auto
       - TRANSCRIBE_API_KEY=${TRANSCRIBE_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - CLEANUP_MODEL=${CLEANUP_MODEL:-anthropic/claude-haiku-4-5}
+      - ACCOUNTS_DB=/data/accounts.db
       - NVIDIA_VISIBLE_DEVICES=all
     ports:
       - "127.0.0.1:8005:8005"
+    volumes:
+      - ./data:/data
     networks:
       - subunit-network
 

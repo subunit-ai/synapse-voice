@@ -1,13 +1,17 @@
-"""transcribe.subunit.ai — FastAPI service wrapping faster-whisper.
+"""transcribe.subunit.ai — FastAPI service for Synapse Voice.
 
-Endpoint:
-    POST /v1/transcribe   (multipart/form-data: file=@audio.wav, language=de)
+Endpoints:
+    POST /v1/transcribe       (audio → text via faster-whisper)
+    POST /v1/cleanup          (raw text → cleaned text via Claude Haiku)
+    POST /v1/account/sign-up  (email → api_key, creates if new)
+    GET  /v1/account/info     (X-API-Key → email, plan, usage stats)
     GET  /v1/health
     GET  /
 
-Auth (optional, via X-API-Key header) — set TRANSCRIBE_API_KEY env to enable.
-
-Designed for the Synapse Voice desktop app (subunit-mode).
+Auth: per-user X-API-Key header (issued by sign-up endpoint).
+A single SERVER-WIDE TRANSCRIBE_API_KEY env var is also accepted for
+operator-level access (used by the desktop app's "raw" subunit mode
+when the user hasn't logged in yet).
 """
 from __future__ import annotations
 
@@ -17,10 +21,15 @@ import time
 import wave
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, EmailStr
+
+import accounts as _accounts
+import cleanup as _cleanup_mod
 
 MODEL_NAME = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
 DEVICE = os.environ.get("WHISPER_DEVICE", "auto")  # auto | cpu | cuda
@@ -64,23 +73,32 @@ def _load_model():
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _accounts.init_db()
     _load_model()
     yield
 
 
 app = FastAPI(
     title="transcribe.subunit.ai",
-    version="0.1.0",
+    version="0.3.0",
     description="Speech-to-text endpoint for Synapse Voice (DSGVO-konform, EU-hosted).",
     lifespan=lifespan,
 )
 
 
-def _check_auth(api_key_header: str | None) -> None:
+def _resolve_caller(api_key_header: str | None) -> dict | None:
+    """Return the account dict for a given API key, or None if it's the
+    operator-level master key (still allowed). Raises 401 otherwise."""
+    if api_key_header == API_KEY and API_KEY:
+        return None  # operator key — allowed, no per-user account
+    if api_key_header:
+        acct = _accounts.lookup_by_key(api_key_header)
+        if acct:
+            return acct
     if not API_KEY:
-        return  # auth disabled
-    if api_key_header != API_KEY:
-        raise HTTPException(status_code=401, detail="invalid api key")
+        # Auth disabled entirely (legacy mode for local-dev)
+        return None
+    raise HTTPException(status_code=401, detail="invalid api key")
 
 
 @app.get("/")
@@ -108,7 +126,7 @@ async def transcribe(
     language: str = Form("de"),
     x_api_key: str | None = Header(default=None),
 ):
-    _check_auth(x_api_key)
+    caller = _resolve_caller(x_api_key)
 
     payload = await file.read()
     if len(payload) > MAX_AUDIO_MB * 1024 * 1024:
@@ -139,6 +157,12 @@ async def transcribe(
         flush=True,
     )
 
+    if caller is not None:
+        try:
+            _accounts.record_usage(caller["api_key"], "transcribe", float(info.duration))
+        except Exception:
+            pass
+
     return JSONResponse(
         {
             "text": text,
@@ -146,6 +170,82 @@ async def transcribe(
             "duration_s": info.duration,
             "elapsed_s": round(elapsed, 3),
             "model": MODEL_NAME,
+        }
+    )
+
+
+# ── Cleanup ────────────────────────────────────────────────────────────────
+
+class CleanupRequest(BaseModel):
+    text: str
+    style: Literal["tidy", "formal", "raw"] = "tidy"
+
+
+@app.post("/v1/cleanup")
+async def cleanup_endpoint(
+    req: CleanupRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    caller = _resolve_caller(x_api_key)
+
+    if not req.text.strip():
+        return JSONResponse({"text": req.text, "style": req.style})
+
+    try:
+        cleaned = await _cleanup_mod.cleanup(req.text, style=req.style)
+    except _cleanup_mod.CleanupError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    if caller is not None:
+        try:
+            _accounts.record_usage(caller["api_key"], "cleanup", 0.0)
+        except Exception:
+            pass
+
+    return JSONResponse({"text": cleaned, "style": req.style})
+
+
+# ── Account ────────────────────────────────────────────────────────────────
+
+class SignUpRequest(BaseModel):
+    email: EmailStr
+
+
+@app.post("/v1/account/sign-up")
+async def account_sign_up(req: SignUpRequest):
+    """Self-service onboarding — return an API key for an email.
+
+    Idempotent: existing email returns the existing api_key (no need for a
+    separate "recover" endpoint). The desktop app uses this both on first
+    install and on re-login.
+    """
+    try:
+        acct = _accounts.get_or_create(str(req.email))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return JSONResponse(
+        {
+            "email": acct["email"],
+            "api_key": acct["api_key"],
+            "plan": acct["plan"],
+            "is_new": acct["is_new"],
+        }
+    )
+
+
+@app.get("/v1/account/info")
+async def account_info(x_api_key: str | None = Header(default=None)):
+    caller = _resolve_caller(x_api_key)
+    if caller is None:
+        # Operator key or auth-disabled — no per-user info
+        return JSONResponse({"email": None, "plan": "operator", "calls": 0, "audio_seconds": 0.0})
+    summary = _accounts.usage_summary(caller["api_key"])
+    return JSONResponse(
+        {
+            "email": caller["email"],
+            "plan": caller["plan"],
+            "calls": summary["calls"],
+            "audio_seconds": summary["audio_seconds"],
         }
     )
 

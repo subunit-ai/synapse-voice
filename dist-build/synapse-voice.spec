@@ -37,8 +37,11 @@ a = Analysis(
     datas=extra_datas,
     hiddenimports=[
         "synapse_voice",
+        "synapse_voice.account",
         "synapse_voice.autostart",
+        "synapse_voice.cleanup_client",
         "synapse_voice.logger",
+        "synapse_voice.updater",
         "synapse_voice.transcriber",
         "synapse_voice.transcriber.local",
         "synapse_voice.transcriber.cloud",

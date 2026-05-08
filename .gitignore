@@ -40,6 +40,9 @@ config.local.json
 .env
 server/.env
 
+# Server runtime data
+server/data/
+
 # Whisper model caches
 models/
 *.bin

@@ -60,6 +60,24 @@ class TranscribeWorker(QObject):
         try:
             transcriber = get_transcriber(self._mode, self._config)
             text = transcriber.transcribe(self._audio, language=self._config.language)
+            # AI cleanup-layer (best-effort, never blocks the result).
+            if text and self._config.cleanup_enabled:
+                from .cleanup_client import cleanup_text
+
+                cleaned = cleanup_text(
+                    text,
+                    transcribe_endpoint=self._config.subunit_endpoint,
+                    api_key=self._config.subunit_api_key,
+                    style=self._config.cleanup_style or "tidy",
+                )
+                if cleaned and cleaned.strip() != text.strip():
+                    _log.info(
+                        "Cleanup applied (style=%s, %d→%d chars)",
+                        self._config.cleanup_style,
+                        len(text),
+                        len(cleaned),
+                    )
+                    text = cleaned
             self.finished.emit(text)
         except TranscriberError as e:
             _log.error("Transcribe failed (mode=%s): %s", self._mode, e)
@@ -70,7 +88,9 @@ class TranscribeWorker(QObject):
 
 
 class SynapseVoiceApp(QObject):
-    request_toggle = pyqtSignal()  # marshals hotkey thread → Qt main thread
+    request_toggle = pyqtSignal()  # marshals hotkey thread → Qt main thread (toggle mode)
+    request_start = pyqtSignal()   # hold-mode press
+    request_stop = pyqtSignal()    # hold-mode release
 
     def __init__(self) -> None:
         super().__init__()
@@ -101,8 +121,17 @@ class SynapseVoiceApp(QObject):
         )
         self.tray.show()
 
-        self.hotkey = GlobalHotkey(self.config.hotkey, self.request_toggle.emit)
+        # In "toggle" mode the hotkey toggles record on each press. In "hold"
+        # mode pressing starts recording and releasing stops it.
+        self.hotkey = GlobalHotkey(
+            self.config.hotkey,
+            on_trigger=self._on_hotkey_press,
+            mode=self.config.recording_mode,
+            on_release=self._on_hotkey_release,
+        )
         self.request_toggle.connect(self.toggle_record)
+        self.request_start.connect(self._start_recording)
+        self.request_stop.connect(self._stop_recording)
         self.hotkey.start()
 
         self.tray.showMessage(
@@ -121,6 +150,22 @@ class SynapseVoiceApp(QObject):
             self._prewarm_thread.finished.connect(self._prewarm_worker.deleteLater)
             self._prewarm_thread.finished.connect(self._prewarm_thread.deleteLater)
             self._prewarm_thread.start()
+
+        # Auto-update check (delayed so app startup isn't blocked by network).
+        if self.config.auto_update_check:
+            QTimer.singleShot(8_000, self._check_for_updates)
+
+    def _on_hotkey_press(self) -> None:
+        """Called from the pynput thread on hotkey press."""
+        if self.config.recording_mode == "hold":
+            self.request_start.emit()
+        else:
+            self.request_toggle.emit()
+
+    def _on_hotkey_release(self) -> None:
+        """Called from the pynput thread on hotkey release (hold mode only)."""
+        if self.config.recording_mode == "hold":
+            self.request_stop.emit()
 
     def toggle_record(self) -> None:
         # Debounce — pynput occasionally double-fires a hotkey on Windows when
@@ -350,6 +395,33 @@ class SynapseVoiceApp(QObject):
         self.config.save()
         self.tray.set_mode(mode)
         self.tray.showMessage("Synapse Voice", f"Mode: {mode}", msecs=1500)
+
+    def _check_for_updates(self) -> None:
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+        from PyQt6.QtWidgets import QMessageBox
+
+        from . import updater
+
+        info = updater.check()
+        if info is None or not info.available:
+            return
+        _log.info("Prompting user for update %s → %s", info.current, info.latest)
+        box = QMessageBox()
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("Synapse Voice — Update available")
+        box.setText(
+            f"A new version is available:\n\n"
+            f"  Current: v{info.current}\n"
+            f"  Latest:  {info.latest}\n\n"
+            f"Open the release page to download?"
+        )
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Open
+            | QMessageBox.StandardButton.Ignore
+        )
+        if box.exec() == QMessageBox.StandardButton.Open:
+            QDesktopServices.openUrl(QUrl(info.release_url))
 
     def quit(self) -> None:
         self.hotkey.stop()
