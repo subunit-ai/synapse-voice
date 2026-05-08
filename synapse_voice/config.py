@@ -83,6 +83,11 @@ class Config:
     # finishes (or skips) the 4-step setup.
     has_seen_onboarding: bool = False
 
+    # v0.4: UI language for chrome strings (Onboarding, Settings, Main).
+    # "de" or "en". Default = de since most Subunit users are German.
+    # Doesn't affect transcription language — that's `language` above.
+    ui_language: str = "de"
+
     # v0.4: Subtle UI sounds — start ping on record, pop on done.
     sound_enabled: bool = True
     sound_volume: float = 0.6  # 0.0..1.0

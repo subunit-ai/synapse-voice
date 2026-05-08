@@ -49,6 +49,8 @@ a = Analysis(
         "synapse_voice",
         "synapse_voice.account",
         "synapse_voice.sounds",
+        "synapse_voice.i18n",
+        "synapse_voice.languages",
         "synapse_voice.autostart",
         "synapse_voice.cleanup_client",
         "synapse_voice.hardware",

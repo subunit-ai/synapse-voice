@@ -313,6 +313,20 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.row_autostart)
 
         layout.addSpacing(6)
+        layout.addWidget(_section_title("App language"))
+        self.ui_language_combo = QComboBox()
+        self.ui_language_combo.addItem("Deutsch", "de")
+        self.ui_language_combo.addItem("English", "en")
+        idx = self.ui_language_combo.findData(self.config.ui_language or "de")
+        if idx >= 0:
+            self.ui_language_combo.setCurrentIndex(idx)
+        layout.addWidget(self.ui_language_combo)
+        layout.addWidget(_hint(
+            "Language used for the app's interface. Independent from the "
+            "transcription language above."
+        ))
+
+        layout.addSpacing(6)
         layout.addWidget(_section_title("Microphone"))
         from ..recorder import list_input_devices
         from .mic_meter import MicLevelMeter
@@ -899,6 +913,11 @@ class SettingsDialog(QDialog):
         config.orb_idle_pulse = self.row_orb_pulse.is_on()
         config.recording_mode = self.recording_mode_combo.currentData() or "toggle"
         config.mic_device_name = self.mic_combo.currentData() or ""
+        new_ui_lang = self.ui_language_combo.currentData() or "de"
+        if new_ui_lang != config.ui_language:
+            config.ui_language = new_ui_lang
+            from .. import i18n
+            i18n.set_language(new_ui_lang)
         # v0.3.9 Lexikon: harvest vocab table into list[dict]
         if hasattr(self, "vocab_table"):
             config.vocabulary = self._harvest_vocab()

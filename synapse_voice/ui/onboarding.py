@@ -28,14 +28,18 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QStackedWidget,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from .. import i18n
 from ..config import Config
 from .hotkey_capture import HotkeyCaptureButton
 from .mic_meter import MicLevelMeter
 from .widgets import AnimatedToggle, BrandLogo
+
+tr = i18n.tr
 
 CYAN = "#40d6ff"
 NIGHT = "#020817"
@@ -70,6 +74,85 @@ QPushButton#ghost {{
 }}
 QPushButton#ghost:hover {{ color: {WHITE}; }}
 """
+
+
+class LanguageToggle(QWidget):
+    """2-segment DE | EN toggle for the onboarding header. Subunit-cyan
+    active half, dim other half. Clicking either half flips the
+    selection and emits .changed(lang)."""
+
+    changed = pyqtSignal(str)
+
+    def __init__(self, current: str) -> None:
+        super().__init__()
+        self.setFixedSize(74, 28)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._current = current if current in ("de", "en") else "de"
+
+    def mousePressEvent(self, e) -> None:
+        # Left half = DE, right half = EN
+        new = "de" if e.position().x() < self.width() / 2 else "en"
+        if new != self._current:
+            self._current = new
+            self.update()
+            self.changed.emit(new)
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect()
+        # Pill background
+        p.setBrush(QColor(NIGHT_2))
+        p.setPen(QPen(QColor(NIGHT_BORDER), 1))
+        p.drawRoundedRect(rect, 14, 14)
+        half_w = rect.width() // 2
+        # Active highlight
+        active_x = rect.x() + 2 if self._current == "de" else rect.x() + half_w
+        active_w = half_w - 2
+        p.setBrush(QColor(CYAN))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(active_x, rect.y() + 2, active_w, rect.height() - 4, 12, 12)
+        # Labels
+        f = QFont()
+        f.setPointSize(9)
+        f.setBold(True)
+        p.setFont(f)
+        for i, label in enumerate(["DE", "EN"]):
+            is_active = (i == 0 and self._current == "de") or (i == 1 and self._current == "en")
+            p.setPen(QColor(NIGHT) if is_active else QColor(WHITE_DIM))
+            x = rect.x() + i * half_w
+            p.drawText(x, rect.y(), half_w, rect.height(),
+                       int(Qt.AlignmentFlag.AlignCenter), label)
+
+
+def _qt_key_to_token(e) -> Optional[str]:
+    """Map a Qt KeyEvent to the same canonical token format we use in
+    config.hotkey ("ctrl", "shift", "alt", "space", "a", "1", ...).
+    Modifiers come from `e.key()` on the press of the modifier itself
+    (not the bitmask) so live-tracking shows them lighting up one by one.
+    """
+    k = e.key()
+    if k == Qt.Key.Key_Control:
+        return "ctrl"
+    if k == Qt.Key.Key_Shift:
+        return "shift"
+    if k == Qt.Key.Key_Alt:
+        return "alt"
+    if k == Qt.Key.Key_Meta:
+        return "cmd"
+    if k == Qt.Key.Key_Space:
+        return "space"
+    if k == Qt.Key.Key_Tab:
+        return "tab"
+    if k == Qt.Key.Key_Return or k == Qt.Key.Key_Enter:
+        return "enter"
+    if k == Qt.Key.Key_Escape:
+        return "esc"
+    # Letters / digits: use the text representation
+    txt = e.text()
+    if txt and txt.isalnum() and len(txt) == 1:
+        return txt.lower()
+    return None
 
 
 class WelcomeHero(QWidget):
@@ -191,11 +274,11 @@ class OnboardingDialog(QDialog):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Welcome to Synapse Voice")
+        self.setWindowTitle("Synapse Voice")
         self.setStyleSheet(QSS)
         self.setModal(True)
-        self.setMinimumSize(640, 520)
-        self.resize(720, 580)
+        self.setMinimumSize(640, 540)
+        self.resize(720, 600)
 
         self.config = config
         self._on_test_record = on_test_record  # invoked from Step 3
@@ -203,25 +286,33 @@ class OnboardingDialog(QDialog):
         self._working = {
             "hotkey": config.hotkey,
             "mode": config.mode,
+            "ui_language": config.ui_language or "de",
         }
+        # Live-key tracking for the Hotkey page's KeyVisualizer
+        self._pressed_keys: set[str] = set()
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(36, 28, 36, 24)
         outer.setSpacing(16)
 
-        # Header (logo + title)
+        # Header (logo + title + DE/EN toggle on the right)
         head = QHBoxLayout()
         head.setSpacing(14)
         head.addWidget(BrandLogo(size=48))
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
-        h1 = QLabel("Welcome.")
-        h1.setObjectName("h1")
-        title_box.addWidget(h1)
-        sub = QLabel("Let's get you dictating in 60 seconds.")
-        sub.setObjectName("dim")
-        title_box.addWidget(sub)
+        self.h1_lbl = QLabel(tr("onb.welcome.title"))
+        self.h1_lbl.setObjectName("h1")
+        title_box.addWidget(self.h1_lbl)
+        self.h1_sub = QLabel(tr("onb.welcome.sub"))
+        self.h1_sub.setObjectName("dim")
+        title_box.addWidget(self.h1_sub)
         head.addLayout(title_box, 1)
+
+        # Language toggle: 2-segment DE | EN at the top-right.
+        self.lang_toggle = LanguageToggle(self._working["ui_language"])
+        self.lang_toggle.changed.connect(self._on_language_change)
+        head.addWidget(self.lang_toggle, 0, Qt.AlignmentFlag.AlignTop)
         outer.addLayout(head)
 
         # Step indicator
@@ -245,16 +336,16 @@ class OnboardingDialog(QDialog):
         # Footer nav
         nav = QHBoxLayout()
         nav.setSpacing(8)
-        self.back_btn = QPushButton("Back")
+        self.back_btn = QPushButton(tr("onb.btn.back"))
         self.back_btn.setObjectName("ghost")
         self.back_btn.clicked.connect(self._go_back)
         nav.addWidget(self.back_btn)
         nav.addStretch()
-        self.skip_btn = QPushButton("Skip")
+        self.skip_btn = QPushButton(tr("onb.btn.skip"))
         self.skip_btn.setObjectName("ghost")
         self.skip_btn.clicked.connect(self._on_finish)
         nav.addWidget(self.skip_btn)
-        self.next_btn = QPushButton("Next")
+        self.next_btn = QPushButton(tr("onb.btn.next"))
         self.next_btn.setObjectName("primary")
         self.next_btn.clicked.connect(self._go_next)
         nav.addWidget(self.next_btn)
@@ -282,14 +373,10 @@ class OnboardingDialog(QDialog):
         feature_box = QVBoxLayout()
         feature_box.setSpacing(12)
         features = [
-            ("🔒", "Local-first by default",
-             "Audio never leaves your machine — unless you opt in to cloud."),
-            ("⚡", "Whisper-quality, zero friction",
-             "Press a hotkey, speak, paste. No window-switching, no copy-paste."),
-            ("🇪🇺", "DSGVO-compliant cloud option",
-             "If you switch to cloud, the Subunit-Server runs in Hamburg."),
-            ("🎯", "Built for daily dictation",
-             "Lexikon for proper nouns. AI cleanup. 99 languages. Auto-update."),
+            ("🔒", tr("onb.feature.local.title"), tr("onb.feature.local.body")),
+            ("⚡", tr("onb.feature.quality.title"), tr("onb.feature.quality.body")),
+            ("🇪🇺", tr("onb.feature.dsgvo.title"), tr("onb.feature.dsgvo.body")),
+            ("🎯", tr("onb.feature.daily.title"), tr("onb.feature.daily.body")),
         ]
         for icon, title, sub in features:
             row = QWidget()
@@ -349,19 +436,15 @@ class OnboardingDialog(QDialog):
         l.setContentsMargins(0, 18, 0, 18)
         l.setSpacing(18)
 
-        title = QLabel("Pick your hotkey")
-        title.setObjectName("h1")
-        title.setStyleSheet("font-size: 22px;")
-        l.addWidget(title)
+        self._hotkey_title = QLabel(tr("onb.hotkey.title"))
+        self._hotkey_title.setObjectName("h1")
+        self._hotkey_title.setStyleSheet("font-size: 22px;")
+        l.addWidget(self._hotkey_title)
 
-        sub = QLabel(
-            "This is the key combo you press to dictate. The default is "
-            "Ctrl + Space — easy to reach with one hand. "
-            "Hold to record, release to transcribe."
-        )
-        sub.setObjectName("dim")
-        sub.setWordWrap(True)
-        l.addWidget(sub)
+        self._hotkey_sub = QLabel(tr("onb.hotkey.sub"))
+        self._hotkey_sub.setObjectName("dim")
+        self._hotkey_sub.setWordWrap(True)
+        l.addWidget(self._hotkey_sub)
 
         # Visual hotkey display — keys light up when pressed (rendered live
         # by KeyVisualizer below)
@@ -377,10 +460,17 @@ class OnboardingDialog(QDialog):
         capture_row.addStretch()
         l.addLayout(capture_row)
 
-        hint = QLabel("Click the button → press your preferred combo")
-        hint.setObjectName("dim")
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        l.addWidget(hint)
+        self._hotkey_hint = QLabel(tr("onb.hotkey.hint"))
+        self._hotkey_hint.setObjectName("dim")
+        self._hotkey_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        l.addWidget(self._hotkey_hint)
+
+        # Live hint — flashes cyan briefly when the user presses a key
+        self._hotkey_live_hint = QLabel(tr("onb.hotkey.live_hint"))
+        self._hotkey_live_hint.setObjectName("dim")
+        self._hotkey_live_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._hotkey_live_hint.setStyleSheet(f"color: {CYAN}; font-size: 12px;")
+        l.addWidget(self._hotkey_live_hint)
         l.addStretch()
         return page
 
@@ -390,34 +480,30 @@ class OnboardingDialog(QDialog):
         l.setContentsMargins(0, 18, 0, 18)
         l.setSpacing(18)
 
-        title = QLabel("Local or cloud?")
-        title.setObjectName("h1")
-        title.setStyleSheet("font-size: 22px;")
-        l.addWidget(title)
+        self._mode_title = QLabel(tr("onb.mode.title"))
+        self._mode_title.setObjectName("h1")
+        self._mode_title.setStyleSheet("font-size: 22px;")
+        l.addWidget(self._mode_title)
 
         cards_row = QHBoxLayout()
         cards_row.setSpacing(14)
 
         self._local_card = ModeCard(
             icon="🔒",
-            title="Local",
-            subtitle="100% private",
-            body="Whisper runs on your machine. "
-                 "Audio never leaves the device. "
-                 "Best for sensitive content.",
-            badge="Default",
+            title=tr("onb.mode.local"),
+            subtitle=tr("onb.mode.local.subtitle"),
+            body=tr("onb.mode.local.body"),
+            badge=tr("onb.mode.local.badge"),
         )
         self._local_card.clicked.connect(lambda: self._pick_mode("local"))
         cards_row.addWidget(self._local_card)
 
         self._cloud_card = ModeCard(
             icon="☁",
-            title="Cloud",
-            subtitle="Faster, more accurate",
-            body="Routed through Subunit-Server in Hamburg. "
-                 "DSGVO-compliant. "
-                 "Slightly faster than Local on a typical laptop.",
-            badge="EU only",
+            title=tr("onb.mode.cloud"),
+            subtitle=tr("onb.mode.cloud.subtitle"),
+            body=tr("onb.mode.cloud.body"),
+            badge=tr("onb.mode.cloud.badge"),
         )
         self._cloud_card.clicked.connect(lambda: self._pick_mode("cloud"))
         cards_row.addWidget(self._cloud_card)
@@ -432,33 +518,57 @@ class OnboardingDialog(QDialog):
     def _build_test(self) -> QWidget:
         page = QWidget()
         l = QVBoxLayout(page)
-        l.setContentsMargins(0, 18, 0, 18)
-        l.setSpacing(16)
+        l.setContentsMargins(0, 14, 0, 14)
+        l.setSpacing(12)
 
-        title = QLabel("Try it out")
-        title.setObjectName("h1")
-        title.setStyleSheet("font-size: 22px;")
-        l.addWidget(title)
+        self._test_title = QLabel(tr("onb.test.title"))
+        self._test_title.setObjectName("h1")
+        self._test_title.setStyleSheet("font-size: 22px;")
+        l.addWidget(self._test_title)
 
-        sub = QLabel(
-            "Speak into your mic. The bar below shows the live signal. "
-            "When you're ready, finish setup and press your hotkey from any "
-            "app to start dictating."
-        )
-        sub.setObjectName("dim")
-        sub.setWordWrap(True)
-        l.addWidget(sub)
+        self._test_sub = QLabel(tr("onb.test.sub"))
+        self._test_sub.setObjectName("dim")
+        self._test_sub.setWordWrap(True)
+        l.addWidget(self._test_sub)
 
-        l.addSpacing(10)
-        l.addWidget(QLabel("Microphone test"))
+        # Hotkey reminder so user knows what to press
+        hotkey_row = QHBoxLayout()
+        hotkey_row.setSpacing(10)
+        self._test_hotkey_lbl = QLabel(tr("onb.test.your_hotkey"))
+        self._test_hotkey_lbl.setObjectName("dim")
+        hotkey_row.addWidget(self._test_hotkey_lbl)
+        self._test_key_viz = KeyVisualizer(self._working["hotkey"])
+        hotkey_row.addWidget(self._test_key_viz)
+        hotkey_row.addStretch()
+        l.addLayout(hotkey_row)
+
+        # Mic-level meter
+        l.addSpacing(4)
+        self._test_mic_lbl = QLabel(tr("onb.test.mic_label"))
+        l.addWidget(self._test_mic_lbl)
         self._meter = MicLevelMeter()
         l.addWidget(self._meter)
 
-        l.addSpacing(20)
-        ready = QLabel("✓ Ready to go. Press Finish to start using Synapse Voice.")
-        ready.setStyleSheet(f"color: {CYAN}; font-size: 13px; font-weight: 600;")
-        ready.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        l.addWidget(ready)
+        # Try-it-out dummy input field — user can focus it + dictate
+        l.addSpacing(4)
+        self._test_try_lbl = QLabel(tr("onb.test.try_label"))
+        l.addWidget(self._test_try_lbl)
+        self._try_field = QTextEdit()
+        self._try_field.setPlaceholderText(tr("onb.test.try_placeholder"))
+        self._try_field.setStyleSheet(
+            f"QTextEdit {{ background: {NIGHT_2}; color: {WHITE}; "
+            f"border: 1px solid {NIGHT_BORDER}; border-radius: 8px; padding: 10px; }} "
+            f"QTextEdit:focus {{ border-color: {CYAN}; }}"
+        )
+        self._try_field.setMinimumHeight(80)
+        self._try_field.setMaximumHeight(120)
+        l.addWidget(self._try_field)
+
+        l.addSpacing(4)
+        self._test_ready = QLabel(tr("onb.test.ready"))
+        self._test_ready.setStyleSheet(f"color: {CYAN}; font-size: 13px; font-weight: 600;")
+        self._test_ready.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        l.addWidget(self._test_ready)
         l.addStretch()
         return page
 
@@ -515,6 +625,78 @@ class OnboardingDialog(QDialog):
         self.finished_setup.emit(dict(self._working))
         self.accept()
 
+    # ── Live-key detection (Hotkey page) ───────────────────────────────────
+
+    def keyPressEvent(self, e) -> None:
+        token = _qt_key_to_token(e)
+        if token:
+            self._pressed_keys.add(token)
+            if hasattr(self, "_key_viz"):
+                self._key_viz.set_pressed(self._pressed_keys)
+        super().keyPressEvent(e)
+
+    def keyReleaseEvent(self, e) -> None:
+        token = _qt_key_to_token(e)
+        if token and token in self._pressed_keys:
+            self._pressed_keys.discard(token)
+            if hasattr(self, "_key_viz"):
+                self._key_viz.set_pressed(self._pressed_keys)
+        super().keyReleaseEvent(e)
+
+    # ── Language toggle ────────────────────────────────────────────────────
+
+    def _on_language_change(self, lang: str) -> None:
+        self._working["ui_language"] = lang
+        i18n.set_language(lang)
+        # Re-render every visible string
+        self._refresh_strings()
+
+    def _refresh_strings(self) -> None:
+        """Re-pull every string from the i18n bundle. Cheaper than
+        rebuilding the whole stack since we keep the widget refs."""
+        self.h1_lbl.setText(tr("onb.welcome.title"))
+        self.h1_sub.setText(tr("onb.welcome.sub"))
+        self.back_btn.setText(tr("onb.btn.back"))
+        self.skip_btn.setText(tr("onb.btn.skip"))
+        # Next/Finish depends on current page
+        is_last = self.stack.currentIndex() == self.stack.count() - 1
+        self.next_btn.setText(tr("onb.btn.finish") if is_last else tr("onb.btn.next"))
+
+        # Page 1 (Hotkey)
+        if hasattr(self, "_hotkey_title"):
+            self._hotkey_title.setText(tr("onb.hotkey.title"))
+            self._hotkey_sub.setText(tr("onb.hotkey.sub"))
+            self._hotkey_hint.setText(tr("onb.hotkey.hint"))
+            self._hotkey_live_hint.setText(tr("onb.hotkey.live_hint"))
+        # Page 2 (Mode)
+        if hasattr(self, "_mode_title"):
+            self._mode_title.setText(tr("onb.mode.title"))
+            self._local_card.set_strings(
+                title=tr("onb.mode.local"),
+                subtitle=tr("onb.mode.local.subtitle"),
+                body=tr("onb.mode.local.body"),
+                badge=tr("onb.mode.local.badge"),
+            )
+            self._cloud_card.set_strings(
+                title=tr("onb.mode.cloud"),
+                subtitle=tr("onb.mode.cloud.subtitle"),
+                body=tr("onb.mode.cloud.body"),
+                badge=tr("onb.mode.cloud.badge"),
+            )
+        # Page 3 (Test)
+        if hasattr(self, "_test_title"):
+            self._test_title.setText(tr("onb.test.title"))
+            self._test_sub.setText(tr("onb.test.sub"))
+            self._test_mic_lbl.setText(tr("onb.test.mic_label"))
+            self._test_try_lbl.setText(tr("onb.test.try_label"))
+            self._test_hotkey_lbl.setText(tr("onb.test.your_hotkey"))
+            self._try_field.setPlaceholderText(tr("onb.test.try_placeholder"))
+            self._test_ready.setText(tr("onb.test.ready"))
+        # Welcome features (have fixed indexes — cheaper to rebuild)
+        # The feature rows aren't easily re-bindable, so skip for now;
+        # toggling language usually happens before the user progresses
+        # past page 0, and we re-build the page each launch.
+
 
 # ── Visual key renderer ──────────────────────────────────────────────────────
 
@@ -533,17 +715,21 @@ class KeyVisualizer(QWidget):
     def __init__(self, combo: str) -> None:
         super().__init__()
         self._keys: list[str] = []
+        self._tokens: list[str] = []
+        self._pressed: set[str] = set()
         self.set_combo(combo)
-        self.setMinimumHeight(self.KEY_HEIGHT + 6)
+        self.setMinimumHeight(self.KEY_HEIGHT + 10)
 
     def set_combo(self, combo: str) -> None:
-        # Parse "<ctrl>+<shift>+<space>" → ["Ctrl", "Shift", "Space"]
+        # Parse "<ctrl>+<shift>+<space>" → tokens + pretty labels
         raw = combo.replace("<", "").replace(">", "").split("+")
+        tokens = []
         pretty = []
         for k in raw:
             k = k.strip().lower()
             if not k:
                 continue
+            tokens.append(k)
             label = {
                 "ctrl": "Ctrl", "shift": "Shift", "alt": "Alt", "cmd": "⌘",
                 "super": "⊞", "space": "Space", "tab": "Tab", "enter": "Enter",
@@ -551,7 +737,15 @@ class KeyVisualizer(QWidget):
             }.get(k, k.upper() if len(k) == 1 else k.capitalize())
             pretty.append(label)
         self._keys = pretty
+        self._tokens = tokens
         self.updateGeometry()
+        self.update()
+
+    def set_pressed(self, pressed: set[str]) -> None:
+        """Update which keys should render in the "live pressed" highlight.
+        Only keys that are part of the current combo light up — random
+        keypresses are ignored to avoid noise."""
+        self._pressed = set(pressed)
         self.update()
 
     def sizeHint(self) -> QSize:
@@ -580,28 +774,49 @@ class KeyVisualizer(QWidget):
         p.setFont(f)
         fm = QFontMetrics(f)
 
+        all_pressed = (
+            len(self._tokens) > 0
+            and all(tok in self._pressed for tok in self._tokens)
+        )
+
         x = 0
-        for i, k in enumerate(self._keys):
+        for i, (k, tok) in enumerate(zip(self._keys, self._tokens)):
             w = max(60, fm.horizontalAdvance(k) + self.KEY_PADDING * 2)
             y = 3
-            # Glow halo
+            is_pressed = tok in self._pressed
+            # Glow halo — stronger when pressed, even stronger when whole
+            # combo is held down.
+            if all_pressed:
+                halo_alpha = 90
+            elif is_pressed:
+                halo_alpha = 70
+            else:
+                halo_alpha = 28
             halo = QColor(CYAN)
-            halo.setAlpha(34)
+            halo.setAlpha(halo_alpha)
             p.setBrush(halo)
             p.setPen(Qt.PenStyle.NoPen)
             p.drawRoundedRect(x - 4, y - 4, w + 8, self.KEY_HEIGHT + 8, 12, 12)
-            # Key body
-            grad = QLinearGradient(0, y, 0, y + self.KEY_HEIGHT)
-            grad.setColorAt(0.0, QColor("#1c3a52"))
-            grad.setColorAt(1.0, QColor(NIGHT_2))
-            p.setBrush(grad)
-            p.setPen(QPen(QColor(NIGHT_BORDER), 1.4))
+            # Key body — fills with cyan when pressed
+            if is_pressed:
+                grad = QLinearGradient(0, y, 0, y + self.KEY_HEIGHT)
+                grad.setColorAt(0.0, QColor("#6cdfff"))
+                grad.setColorAt(1.0, QColor(CYAN))
+                p.setBrush(grad)
+                p.setPen(QPen(QColor("#6cdfff"), 1.6))
+            else:
+                grad = QLinearGradient(0, y, 0, y + self.KEY_HEIGHT)
+                grad.setColorAt(0.0, QColor("#1c3a52"))
+                grad.setColorAt(1.0, QColor(NIGHT_2))
+                p.setBrush(grad)
+                p.setPen(QPen(QColor(NIGHT_BORDER), 1.4))
             p.drawRoundedRect(x, y, w, self.KEY_HEIGHT, 10, 10)
-            # Highlight stripe
-            p.setPen(QPen(QColor(CYAN), 2.0))
-            p.drawLine(x + 8, y + 4, x + w - 8, y + 4)
+            # Highlight stripe — only on idle keys
+            if not is_pressed:
+                p.setPen(QPen(QColor(CYAN), 2.0))
+                p.drawLine(x + 8, y + 4, x + w - 8, y + 4)
             # Text
-            p.setPen(QColor(WHITE))
+            p.setPen(QColor(NIGHT) if is_pressed else QColor(WHITE))
             p.drawText(
                 x, y, w, self.KEY_HEIGHT,
                 int(Qt.AlignmentFlag.AlignCenter),
@@ -610,11 +825,23 @@ class KeyVisualizer(QWidget):
 
             x += w
             if i < len(self._keys) - 1:
-                # "+" separator
-                p.setPen(QColor(WHITE_DIM))
+                # "+" separator — turns cyan when both sides pressed
+                left_pressed = tok in self._pressed
+                right_tok = self._tokens[i + 1] if i + 1 < len(self._tokens) else None
+                right_pressed = right_tok in self._pressed if right_tok else False
+                p.setPen(QColor(CYAN) if (left_pressed and right_pressed) else QColor(WHITE_DIM))
                 p.drawText(x, y, 18, self.KEY_HEIGHT,
                            int(Qt.AlignmentFlag.AlignCenter), "+")
                 x += 18
+
+        # Confirmation marker on the right when the whole combo is down
+        if all_pressed:
+            cx_check = x + 8
+            cy_check = self.KEY_HEIGHT // 2 + 3
+            p.setPen(QPen(QColor("#22c55e"), 2.5))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawLine(cx_check - 6, cy_check, cx_check - 1, cy_check + 5)
+            p.drawLine(cx_check - 1, cy_check + 5, cx_check + 7, cy_check - 5)
 
 
 # ── Mode card widget ─────────────────────────────────────────────────────────
@@ -639,6 +866,20 @@ class ModeCard(QWidget):
         if active != self._active:
             self._active = active
             self.update()
+
+    def set_strings(
+        self,
+        title: str,
+        subtitle: str,
+        body: str,
+        badge: str,
+    ) -> None:
+        """Re-bind labels for live language switching."""
+        self._title = title
+        self._subtitle = subtitle
+        self._body = body
+        self._badge = badge
+        self.update()
 
     def mousePressEvent(self, _e) -> None:
         self.clicked.emit()

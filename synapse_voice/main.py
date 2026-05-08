@@ -122,6 +122,10 @@ class SynapseVoiceApp(QObject):
     def __init__(self) -> None:
         super().__init__()
         self.config = Config.load()
+        # v0.3.19: prime the i18n bundle from config before any UI is
+        # built so first-render strings reflect the user's language.
+        from . import i18n
+        i18n.set_language(self.config.ui_language or "de")
         self.recorder = Recorder(device=_resolve_mic_device(self.config.mic_device_name))
         self.target: WindowTarget | None = None
         self._active_threads: list[tuple[QThread, "TranscribeWorker"]] = []
@@ -471,6 +475,9 @@ class SynapseVoiceApp(QObject):
         def _apply(settings: dict) -> None:
             self.config.hotkey = settings.get("hotkey") or self.config.hotkey
             new_mode = settings.get("mode") or self.config.mode
+            self.config.ui_language = settings.get("ui_language") or self.config.ui_language
+            from . import i18n
+            i18n.set_language(self.config.ui_language)
             if new_mode != self.config.mode:
                 # Route via change_mode so cache invalidation + tray update happens
                 self.change_mode(new_mode)
