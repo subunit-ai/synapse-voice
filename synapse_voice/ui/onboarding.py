@@ -292,6 +292,10 @@ class OnboardingDialog(QDialog):
             "subunit_api_key": config.subunit_api_key or "",
             "plan": config.plan or "free",
             "trial_started_at": config.trial_started_at or 0,
+            # v0.3.26: Auto-Mode advertised in the onboarding — flips
+            # cleanup_auto_mode + cleanup_enabled when the user opts in.
+            "cleanup_auto_mode": config.cleanup_auto_mode,
+            "cleanup_enabled": config.cleanup_enabled,
         }
         # Live-key tracking for the Hotkey page's KeyVisualizer
         self._pressed_keys: set[str] = set()
@@ -329,6 +333,7 @@ class OnboardingDialog(QDialog):
         self.stack.addWidget(self._build_theme())
         self.stack.addWidget(self._build_hotkey())
         self.stack.addWidget(self._build_mode())
+        self.stack.addWidget(self._build_auto_mode())
         self.stack.addWidget(self._build_test())
 
         # Step indicator
@@ -659,6 +664,171 @@ class OnboardingDialog(QDialog):
         # Initial highlight reflects current pick
         self._sync_mode_cards()
         return page
+
+    def _build_auto_mode(self) -> QWidget:
+        """Auto-Mode page — interactive demo with 4 clickable context tabs.
+        Same dictation, four tonalities (Prompt / Email / Slack / Formal).
+        Toggle at the bottom flips cleanup_auto_mode + cleanup_enabled."""
+        page = QWidget()
+        l = QVBoxLayout(page)
+        l.setContentsMargins(0, 14, 0, 14)
+        l.setSpacing(12)
+
+        self._auto_title = QLabel("Auto-Mode — die Tonalität trifft sich selbst")
+        self._auto_title.setObjectName("h1")
+        self._auto_title.setStyleSheet("font-size: 22px;")
+        l.addWidget(self._auto_title)
+
+        self._auto_sub = QLabel(
+            "Synapse Voice merkt, in welchem Fenster du tippst, und passt den "
+            "Cleanup-Stil automatisch an. Diktierst du in ChatGPT? Du bekommst "
+            "einen strukturierten Prompt. In Gmail? Eine höfliche Mail. In "
+            "Slack? Ein lockerer Ping. Klick dich durch:"
+        )
+        self._auto_sub.setObjectName("dim")
+        self._auto_sub.setWordWrap(True)
+        l.addWidget(self._auto_sub)
+
+        # Tab row
+        tabs = QHBoxLayout()
+        tabs.setSpacing(8)
+        self._auto_tabs: dict[str, QPushButton] = {}
+        for key, icon, label in [
+            ("chatgpt", "🤖", "ChatGPT"),
+            ("email", "✉", "Gmail"),
+            ("slack", "💬", "Slack"),
+            ("word", "📄", "Word"),
+        ]:
+            btn = QPushButton(f"  {icon}  {label}")
+            btn.setCheckable(True)
+            btn.clicked.connect(lambda _checked, k=key: self._on_auto_tab(k))
+            btn.setStyleSheet(
+                "QPushButton {"
+                "  background: rgba(15, 23, 42, 0.55);"
+                "  color: #cbd5e1;"
+                "  border: 1px solid rgba(148, 163, 184, 0.18);"
+                "  border-radius: 10px;"
+                "  padding: 9px 16px;"
+                "  font-weight: 600;"
+                "}"
+                "QPushButton:hover {"
+                "  border-color: rgba(34, 211, 238, 0.45);"
+                "  color: #fff;"
+                "}"
+                "QPushButton:checked {"
+                "  background: #22d3ee;"
+                "  color: #030b18;"
+                "  border-color: #22d3ee;"
+                "}"
+            )
+            tabs.addWidget(btn)
+            self._auto_tabs[key] = btn
+        tabs.addStretch()
+        l.addLayout(tabs)
+
+        # Output panel — single QLabel that re-renders on tab click
+        from PyQt6.QtWidgets import QFrame
+        self._auto_panel = QFrame()
+        self._auto_panel.setStyleSheet(
+            "QFrame {"
+            "  background: rgba(3, 11, 24, 0.55);"
+            "  border: 1px solid rgba(34, 211, 238, 0.18);"
+            "  border-radius: 12px;"
+            "  padding: 16px;"
+            "}"
+        )
+        panel_l = QVBoxLayout(self._auto_panel)
+        panel_l.setContentsMargins(14, 14, 14, 14)
+        panel_l.setSpacing(8)
+
+        self._auto_panel_eyebrow = QLabel("CLEANUP-STIL · AUTO-GEWÄHLT  →  Prompt")
+        self._auto_panel_eyebrow.setStyleSheet(
+            "color: #67e8f9; font-family: ui-monospace, Menlo, monospace; "
+            "font-size: 10px; letter-spacing: 2px; font-weight: 700;"
+        )
+        panel_l.addWidget(self._auto_panel_eyebrow)
+
+        self._auto_panel_text = QLabel("")
+        self._auto_panel_text.setWordWrap(True)
+        self._auto_panel_text.setStyleSheet(
+            "color: #e2e8f0; font-size: 13px; line-height: 1.55;"
+            "padding: 4px 2px;"
+        )
+        self._auto_panel_text.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        panel_l.addWidget(self._auto_panel_text)
+
+        self._auto_panel_note = QLabel("")
+        self._auto_panel_note.setWordWrap(True)
+        self._auto_panel_note.setObjectName("dim")
+        self._auto_panel_note.setStyleSheet(
+            "color: #64748b; font-size: 11px; padding-top: 6px;"
+        )
+        panel_l.addWidget(self._auto_panel_note)
+
+        l.addWidget(self._auto_panel, 1)
+
+        # Toggle row at the bottom
+        toggle_row = QHBoxLayout()
+        toggle_row.setSpacing(12)
+        self._auto_toggle_btn = QPushButton("✓ Auto-Mode aktivieren")
+        self._auto_toggle_btn.setCheckable(True)
+        self._auto_toggle_btn.setChecked(self._working["cleanup_auto_mode"])
+        self._auto_toggle_btn.toggled.connect(self._on_auto_toggle)
+        self._auto_toggle_btn.setStyleSheet(
+            "QPushButton {"
+            "  background: rgba(34, 211, 238, 0.15);"
+            "  color: #22d3ee;"
+            "  border: 1px solid rgba(34, 211, 238, 0.4);"
+            "  border-radius: 10px;"
+            "  padding: 10px 18px;"
+            "  font-weight: 700;"
+            "}"
+            "QPushButton:checked {"
+            "  background: #22d3ee;"
+            "  color: #030b18;"
+            "  border-color: #22d3ee;"
+            "}"
+            "QPushButton:hover {"
+            "  border-color: #67e8f9;"
+            "}"
+        )
+        toggle_row.addWidget(self._auto_toggle_btn)
+
+        self._auto_toggle_hint = QLabel(
+            "Default-Style aus Settings greift wenn keine Regel matched."
+        )
+        self._auto_toggle_hint.setObjectName("dim")
+        self._auto_toggle_hint.setStyleSheet("color: #64748b; font-size: 11px;")
+        toggle_row.addWidget(self._auto_toggle_hint)
+        toggle_row.addStretch()
+        l.addLayout(toggle_row)
+
+        # Initial render
+        self._on_auto_tab("chatgpt")
+        return page
+
+    def _on_auto_tab(self, key: str) -> None:
+        # Toggle the right button checked + render the right copy
+        for k, btn in self._auto_tabs.items():
+            btn.setChecked(k == key)
+        ctx = _AUTO_DEMO[key]
+        self._auto_panel_eyebrow.setText(
+            f"CLEANUP-STIL · AUTO-GEWÄHLT  →  {ctx['style']}"
+        )
+        self._auto_panel_text.setText(ctx["output"])
+        self._auto_panel_note.setText(ctx["note"])
+
+    def _on_auto_toggle(self, checked: bool) -> None:
+        self._working["cleanup_auto_mode"] = checked
+        # If user opted in, flip cleanup_enabled too — auto-mode is
+        # meaningless without cleanup. They can still turn it off later.
+        if checked:
+            self._working["cleanup_enabled"] = True
+        self._auto_toggle_btn.setText(
+            "✓ Auto-Mode ist an" if checked else "Auto-Mode aktivieren"
+        )
 
     def _build_test(self) -> QWidget:
         page = QWidget()
@@ -1253,3 +1423,58 @@ class ModeCard(QWidget):
             p.drawText(bx, by, badge_w, badge_h,
                        int(Qt.AlignmentFlag.AlignCenter),
                        self._badge)
+
+
+# v0.3.26: Auto-Mode demo data — same dictation rendered four ways.
+# Mirrors the marketing site's AutoMode.tsx so the user sees the same
+# examples in both places. The transcribed-input is the same German
+# spoken sentence; the four outputs come from running it through the
+# four cleanup styles (prompt / email / slack / formal).
+_AUTO_DEMO: dict[str, dict[str, str]] = {
+    "chatgpt": {
+        "style": "Prompt",
+        "output": (
+            "Schreibe eine Nachricht an Maria, die das morgige 10-Uhr-"
+            "Meeting verschiebt.\n\n"
+            "• Empfänger: Maria\n"
+            "• Begründung: Ich brauche noch Unterlagen.\n"
+            "• Tonfall: höflich, knapp.\n"
+            "• Sprache: Deutsch"
+        ),
+        "note": "Strukturiert für AI-Agents — Goal + Bullets + Constraints.",
+    },
+    "email": {
+        "style": "Email",
+        "output": (
+            "Hi Maria,\n\n"
+            "ich muss unser Meeting morgen um 10 Uhr leider verschieben — "
+            "mir fehlen noch ein paar Unterlagen.\n\n"
+            "Ich melde mich gleich mit einem neuen Vorschlag.\n\n"
+            "Beste Grüße"
+        ),
+        "note": "Höfliche Mail — Anrede + Body + Closer.",
+    },
+    "slack": {
+        "style": "Slack",
+        "output": (
+            "Maria, sorry — kurz zwischendurch: Meeting morgen 10 Uhr muss "
+            "ich verschieben, mir fehlen noch Unterlagen. Schick dir gleich "
+            "einen neuen Slot ✌"
+        ),
+        "note": "Casual chat — keine Anrede / kein Sign-off.",
+    },
+    "word": {
+        "style": "Formal",
+        "output": (
+            "Sehr geehrte Frau Maria,\n\n"
+            "leider muss ich unser für morgen, 10:00 Uhr terminiertes "
+            "Meeting verschieben. Mir fehlen noch einige Unterlagen, "
+            "die ich vorab benötige, um das Gespräch produktiv führen "
+            "zu können.\n\n"
+            "Ich werde Ihnen umgehend einen alternativen Termin "
+            "vorschlagen.\n\n"
+            "Mit freundlichen Grüßen"
+        ),
+        "note": "Business-formal — komplette Anrede + ausführliche Begründung.",
+    },
+}

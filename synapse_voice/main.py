@@ -636,6 +636,14 @@ class SynapseVoiceApp(QObject):
             trial_ts = settings.get("trial_started_at") or 0
             if trial_ts:
                 self.config.trial_started_at = trial_ts
+            # v0.3.26: Auto-Mode opt-in from the new Onboarding page
+            if "cleanup_auto_mode" in settings:
+                self.config.cleanup_auto_mode = bool(settings["cleanup_auto_mode"])
+                # Auto-Mode is meaningless without cleanup; if the user
+                # opted in we flip cleanup_enabled too. They can still
+                # toggle it off in Settings later.
+                if settings["cleanup_auto_mode"]:
+                    self.config.cleanup_enabled = True
             from . import i18n, theme as _theme
             i18n.set_language(self.config.ui_language)
             _theme.apply(QApplication.instance(), self.config.ui_theme)
