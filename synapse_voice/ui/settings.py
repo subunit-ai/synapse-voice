@@ -175,8 +175,10 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Synapse Voice — Settings")
         self.setStyleSheet(DARK_QSS)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
-        self.setMinimumSize(640, 580)
-        self.resize(680, 640)
+        # Size hint — comfortably fits the General tab on a typical 1080p
+        # screen without dwarfing it. User can resize.
+        self.setMinimumSize(560, 460)
+        self.resize(620, 540)
         self.config = config
 
         outer = QVBoxLayout(self)
@@ -349,24 +351,43 @@ class SettingsDialog(QDialog):
         return page
 
     def _build_local_panel(self) -> None:
+        from .. import hardware as _hw
+
         panel = QWidget()
         panel.setObjectName("tabPage")
         f = QFormLayout(panel)
         f.setContentsMargins(0, 0, 0, 0)
         f.setSpacing(10)
+
+        hw = _hw.detect()
+        recommended = _hw.recommend_local_model(hw)
+        self._recommended_model = recommended
+
         self.local_model_combo = QComboBox()
         for m in ["base", "small", "medium", "large-v3"]:
-            self.local_model_combo.addItem(m, m)
+            label = m + ("  ⭐ recommended for your hardware" if m == recommended else "")
+            self.local_model_combo.addItem(label, m)
         idx = self.local_model_combo.findData(self.config.local_model)
         if idx >= 0:
             self.local_model_combo.setCurrentIndex(idx)
         f.addRow("Model", self.local_model_combo)
+
+        auto_btn = QPushButton(f"Use recommended ({recommended})")
+        auto_btn.clicked.connect(self._apply_recommended_model)
+        f.addRow("", auto_btn)
+
         f.addRow("", _hint(
+            f"Detected hardware: {_hw.describe(hw)}.\n\n"
             "Larger models are more accurate but slower and use more RAM. "
-            "First use of each model downloads ~150MB - 1.5GB."
+            "First use of each model downloads ~150MB – 1.5GB."
         ))
         self.provider_stack.addWidget(panel)
         self._panel_index = {"local": 0}
+
+    def _apply_recommended_model(self) -> None:
+        idx = self.local_model_combo.findData(self._recommended_model)
+        if idx >= 0:
+            self.local_model_combo.setCurrentIndex(idx)
 
     def _build_subunit_panel(self) -> None:
         panel = QWidget()

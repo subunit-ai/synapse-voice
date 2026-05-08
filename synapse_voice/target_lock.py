@@ -38,9 +38,22 @@ def capture_active_window() -> WindowTarget | None:
     if sys.platform == "win32":
         try:
             import ctypes
+            import os as _os
 
             user32 = ctypes.windll.user32
             hwnd = user32.GetForegroundWindow()
+
+            # Guard: don't capture our own window as the paste target —
+            # otherwise pressing the hotkey while Synapse Voice itself has
+            # focus would auto-paste back into our settings dialog.
+            try:
+                pid_buf = ctypes.c_ulong(0)
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_buf))
+                if pid_buf.value == _os.getpid():
+                    return None
+            except Exception:
+                pass
+
             length = user32.GetWindowTextLengthW(hwnd)
             buf = ctypes.create_unicode_buffer(length + 1)
             user32.GetWindowTextW(hwnd, buf, length + 1)
@@ -309,20 +322,68 @@ def _win_paste_keystroke() -> bool:
 def paste_into(target: WindowTarget | None, text: str) -> tuple[bool, str]:
     """Returns (success, mode) where mode is 'pasted' | 'clipboard' | 'none'."""
     if not set_clipboard(text):
+        _log_paste("set_clipboard failed → none")
         return False, "none"
     if target is None:
+        _log_paste("no target → clipboard only")
         return True, "clipboard"
-    if not focus_window(target):
+    focused = focus_window(target)
+    _log_paste(f"focus_window({target.title[:40]!r}) → {focused}")
+    if not focused:
         return True, "clipboard"
+
+    # On Win we run a chain of strategies in priority order. The first that
+    # succeeds wins. SendInput Ctrl+V works for most modern apps including
+    # Electron/Chrome. WM_PASTE works for native EDIT/RICHEDIT. keybd_event
+    # is the legacy fallback some old apps still respect.
+    if target.platform == "win32":
+        for strategy_name, strategy in (
+            ("SendInput", paste_keystroke),
+            ("WM_PASTE", lambda: _win_post_paste(int(target.window_id))),
+            ("keybd_event", _win_keybd_paste),
+        ):
+            try:
+                ok = bool(strategy())
+            except Exception as e:
+                _log_paste(f"strategy {strategy_name} threw: {e}")
+                ok = False
+            _log_paste(f"strategy {strategy_name} → {ok}")
+            if ok:
+                return True, "pasted"
+        return True, "clipboard"
+
+    # Linux: just keystroke
     if not paste_keystroke():
-        # Fallback: try WM_PASTE directly to the target HWND (Win only).
-        # Works for native EDIT/RICHEDIT controls even when SendInput Ctrl+V
-        # gets eaten by some focus-policy quirk. Doesn't work for Electron /
-        # Chrome embeds, but those usually accept SendInput just fine.
-        if target.platform == "win32" and _win_post_paste(int(target.window_id)):
-            return True, "pasted"
         return True, "clipboard"
     return True, "pasted"
+
+
+def _log_paste(msg: str) -> None:
+    """Best-effort logger — silent if the logger isn't initialised yet."""
+    try:
+        from .logger import get as _get_logger
+
+        _get_logger(__name__).info("paste: %s", msg)
+    except Exception:
+        pass
+
+
+def _win_keybd_paste() -> bool:
+    """Legacy keybd_event Ctrl+V — tried after SendInput as a fallback."""
+    try:
+        import ctypes
+
+        VK_CONTROL = 0x11
+        VK_V = 0x56
+        KEYEVENTF_KEYUP = 0x0002
+        user32 = ctypes.windll.user32
+        user32.keybd_event(VK_CONTROL, 0, 0, 0)
+        user32.keybd_event(VK_V, 0, 0, 0)
+        user32.keybd_event(VK_V, 0, KEYEVENTF_KEYUP, 0)
+        user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+        return True
+    except Exception:
+        return False
 
 
 def _win_post_paste(hwnd: int) -> bool:

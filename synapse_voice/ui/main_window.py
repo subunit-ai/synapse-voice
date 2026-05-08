@@ -146,9 +146,11 @@ class MainWindow(QMainWindow):
         title_box.addWidget(version)
         header.addLayout(title_box)
         header.addStretch()
-        self.status_lbl = QLabel("● idle")
-        self.status_lbl.setObjectName("statusBig")
-        header.addWidget(self.status_lbl)
+        # Status is now reflected only in the bubble + tray icon. The redundant
+        # "● idle" pill in the header looked like a notification badge and TJ
+        # wanted it gone.
+        self.status_lbl = QLabel("")
+        self.status_lbl.setVisible(False)
         outer.addLayout(header)
 
         # ── Stats row ──────────────────────────────────────────────────────
@@ -243,8 +245,9 @@ class MainWindow(QMainWindow):
     # ── public API ─────────────────────────────────────────────────────────
 
     def set_status(self, label: str, color: str = CYAN) -> None:
-        self.status_lbl.setText(f"● {label}")
-        self.status_lbl.setStyleSheet(f"color: {color};")
+        # No-op kept for callsite compatibility — status now lives in the
+        # tray icon + floating bubble only.
+        return
 
     def refresh_mode(self) -> None:
         """Re-sync the mode combo with config (after Settings dialog applied)."""

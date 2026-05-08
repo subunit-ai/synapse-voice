@@ -40,6 +40,7 @@ a = Analysis(
         "synapse_voice.account",
         "synapse_voice.autostart",
         "synapse_voice.cleanup_client",
+        "synapse_voice.hardware",
         "synapse_voice.logger",
         "synapse_voice.updater",
         "synapse_voice.transcriber",
@@ -100,6 +101,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     version=str(ROOT / "dist-build" / "version-info.txt"),
+    icon=str(ROOT / "icons" / "subunit-logo.png"),
 )
 
 coll = COLLECT(

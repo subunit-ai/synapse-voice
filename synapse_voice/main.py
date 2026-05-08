@@ -439,6 +439,28 @@ def main() -> int:
         app.setApplicationName("Synapse Voice")
         app.setApplicationVersion(__version__)
 
+        # Brand icon — used for the title bar, Alt-Tab switcher and Win taskbar.
+        try:
+            from PyQt6.QtGui import QIcon
+            from .ui.widgets import make_logo_pixmap
+
+            app_icon = QIcon(make_logo_pixmap(size=256))
+            app.setWindowIcon(app_icon)
+        except Exception:
+            pass
+
+        # Windows: register an explicit AppUserModelID so taskbar entries
+        # group under "Synapse Voice" instead of the generic Python interp.
+        if sys.platform == "win32":
+            try:
+                import ctypes
+
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                    "subunit.synapse-voice"
+                )
+            except Exception:
+                pass
+
         if not Tray.isSystemTrayAvailable():
             QMessageBox.critical(
                 None,
