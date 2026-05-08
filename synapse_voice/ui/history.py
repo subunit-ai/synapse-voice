@@ -121,8 +121,15 @@ class HistoryDialog(QDialog):
 
     def _copy_selected(self) -> None:
         text = self._selected_text()
-        if text:
-            QGuiApplication.clipboard().setText(text)
+        if not text:
+            return
+        # Use the same native clipboard path the paste flow uses — Qt's clipboard
+        # on Windows can lose ownership when the dialog closes, leaving an empty
+        # clipboard. Native SetClipboardData transfers ownership properly.
+        from ..target_lock import set_clipboard
+
+        if not set_clipboard(text):
+            QGuiApplication.clipboard().setText(text)  # last-resort fallback
 
     def _repaste_selected(self) -> None:
         text = self._selected_text()

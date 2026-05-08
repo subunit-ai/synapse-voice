@@ -102,6 +102,16 @@ class Bubble(QWidget):
         auto_hide_ms: int = 0,
         anchor_to_cursor: bool = True,
     ) -> None:
+        # Cancel any in-flight fade or auto-hide before transitioning. Without
+        # this, calling show_state during the previous fade_out leaves the
+        # bubble half-visible / partly-hidden and made repeated triggers fail.
+        self._fade_anim.stop()
+        try:
+            self._fade_anim.finished.disconnect()
+        except TypeError:
+            pass
+        self._auto_hide.stop()
+
         self._state = state
         self._text = text
         self._meter_history = [0.0] * self.METER_BARS
@@ -115,17 +125,20 @@ class Bubble(QWidget):
             self._tick.stop()
 
         if not self.isVisible():
+            self._opacity_effect.setOpacity(0.0)
             self.show()
         self.fade_in()
         self.update()
 
         if auto_hide_ms > 0:
             self._auto_hide.start(auto_hide_ms)
-        else:
-            self._auto_hide.stop()
 
     def fade_in(self) -> None:
         self._fade_anim.stop()
+        try:
+            self._fade_anim.finished.disconnect()
+        except TypeError:
+            pass
         self._fade_anim.setStartValue(self._opacity_effect.opacity())
         self._fade_anim.setEndValue(1.0)
         self._fade_anim.setDuration(220)

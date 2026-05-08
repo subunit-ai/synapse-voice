@@ -126,11 +126,15 @@ jobs:
       - name: Resolve installer version
         id: ver
         run: |
+          # NSIS VIProductVersion requires X.X.X.X numeric — keep the version
+          # purely numeric. Tag pushes get the real tag; everything else gets
+          # a 0.0.0 placeholder (the binary's __version__ still tracks the
+          # real Python package version).
           $tag = "${{ github.ref_name }}"
-          if ($tag -match '^v\d+\.\d+\.\d+') {
-            $version = $tag.TrimStart('v')
+          if ($tag -match '^v(\d+\.\d+\.\d+)$') {
+            $version = $matches[1]
           } else {
-            $version = "0.0.0-$($env:GITHUB_SHA.Substring(0,7))"
+            $version = "0.0.0"
           }
           echo "version=$version" >> $env:GITHUB_OUTPUT
           echo "Resolved version: $version"

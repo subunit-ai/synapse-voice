@@ -72,8 +72,7 @@ class SynapseVoiceApp(QObject):
         self.config = Config.load()
         self.recorder = Recorder()
         self.target: WindowTarget | None = None
-        self._thread: QThread | None = None
-        self._worker: TranscribeWorker | None = None
+        self._active_threads: list[tuple[QThread, "TranscribeWorker"]] = []
         self._last_audio_seconds: float = 0.0
 
         self.bubble = Bubble()
@@ -151,24 +150,30 @@ class SynapseVoiceApp(QObject):
         self._run_transcribe(audio)
 
     def _run_transcribe(self, audio) -> None:
-        self._thread = QThread()
-        self._worker = TranscribeWorker(audio, self.config.mode, self.config)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.finished.connect(self._on_transcribe_done)
-        self._worker.failed.connect(self._on_transcribe_failed)
-        self._worker.finished.connect(self._thread.quit)
-        self._worker.failed.connect(self._thread.quit)
-        self._thread.finished.connect(self._cleanup_thread)
-        self._thread.start()
+        # Capture thread+worker locally so a follow-up call does not orphan the
+        # previous pair (otherwise rapid hotkey re-trigger could call
+        # deleteLater on the new thread while the old one's finished signal
+        # fires).
+        thread = QThread()
+        worker = TranscribeWorker(audio, self.config.mode, self.config)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_transcribe_done)
+        worker.failed.connect(self._on_transcribe_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        # Keep references alive until cleanup
+        self._active_threads.append((thread, worker))
+        thread.finished.connect(lambda t=thread, w=worker: self._drop_thread(t, w))
+        thread.start()
 
-    def _cleanup_thread(self) -> None:
-        if self._worker is not None:
-            self._worker.deleteLater()
-            self._worker = None
-        if self._thread is not None:
-            self._thread.deleteLater()
-            self._thread = None
+    def _drop_thread(self, thread, worker) -> None:
+        try:
+            self._active_threads.remove((thread, worker))
+        except ValueError:
+            pass
 
     def _on_transcribe_done(self, text: str) -> None:
         text = (text or "").strip()
