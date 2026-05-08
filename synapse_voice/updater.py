@@ -109,6 +109,29 @@ def _pick_installer_asset(assets: list) -> tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+_ALLOWED_DL_HOSTS = (
+    "github.com",
+    "objects.githubusercontent.com",  # GitHub Releases CDN
+    "github-releases.githubusercontent.com",
+)
+
+
+def _is_allowed_download_url(url: str) -> bool:
+    """Whitelist GitHub-hosted release downloads. Defense-in-depth so a
+    compromised release.json or upstream redirect can't trick us into
+    fetching arbitrary URLs and handing them to ShellExecute as admin."""
+    try:
+        from urllib.parse import urlparse
+
+        u = urlparse(url)
+        if u.scheme != "https":
+            return False
+        host = (u.hostname or "").lower()
+        return any(host == h or host.endswith("." + h) for h in _ALLOWED_DL_HOSTS)
+    except Exception:
+        return False
+
+
 def download_installer(
     url: str,
     target_dir: Optional[Path] = None,
@@ -117,6 +140,11 @@ def download_installer(
 ) -> Path:
     """Stream-download the installer to disk. Calls progress_cb(bytes, total)
     on every chunk if total size is known. Returns the saved path."""
+    if not _is_allowed_download_url(url):
+        raise ValueError(
+            f"Refusing to download from non-GitHub host: {url!r}. "
+            "Update aborted as a safety check."
+        )
     if target_dir is None:
         target_dir = Path(tempfile.gettempdir())
     target_dir.mkdir(parents=True, exist_ok=True)

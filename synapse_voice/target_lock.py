@@ -466,6 +466,13 @@ def _enum_edit_children(hwnd: int) -> list[tuple[int, str]]:
 
     user32 = ctypes.windll.user32
 
+    # Explicit signatures — without these, ctypes' default c_int truncates
+    # HWND/LPARAM on x64 Windows and the call randomly returns garbage.
+    user32.EnumChildWindows.argtypes = [
+        wintypes.HWND, ctypes.c_void_p, wintypes.LPARAM
+    ]
+    user32.EnumChildWindows.restype = wintypes.BOOL
+
     EDIT_HINTS = ("Edit", "RichEdit", "RICHEDIT", "Scintilla", "RichEditD2DPT")
     found: list[tuple[int, str]] = []
 
@@ -473,13 +480,18 @@ def _enum_edit_children(hwnd: int) -> list[tuple[int, str]]:
         wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
     )
 
-    def _cb(child: int, _lparam: int) -> bool:
+    def _cb(child: int, _lparam: int) -> int:
         cls = _win_class_name(child)
         if any(hint in cls for hint in EDIT_HINTS):
             found.append((child, cls))
-        return True  # keep enumerating
+        return 1  # BOOL TRUE — keep enumerating (Python True works too via
+        # implicit cast but explicit int avoids a subtle ctypes warning).
 
-    user32.EnumChildWindows(hwnd, EnumChildProc(_cb), 0)
+    # Bind the callback object to a local so it isn't GC'd before the API
+    # finishes iterating — Python could otherwise free the WINFUNCTYPE
+    # wrapper mid-call and crash inside user32.
+    callback = EnumChildProc(_cb)
+    user32.EnumChildWindows(hwnd, callback, 0)
     return found
 
 
