@@ -2,23 +2,30 @@
 
 Stand 2026-05-08, abgeleitet aus TJs Voicely-Walkthrough + heutigen Tests.
 
-## ✅ Heute geshipped
+## ✅ Heute geshipped (8. Mai 2026)
 - [x] **v0.3.2** — Local-Toggle + Local-Modell-Picker auf Hauptseite, Cloud-Dropdown nur Cloud, Account-UX-Klarheit, .ico-Build-Fix
-- [x] **v0.3.3** — Auto-paste deep fix (AttachThreadInput offen halten, SendMessageTimeout statt PostMessage, Child-Walk fuer RichEditD2DPT)
+- [x] **v0.3.3** — Auto-paste deep fix (AttachThreadInput offen halten, SendMessageTimeout statt PostMessage, Child-Walk fuer RichEditD2DPT) ✅ **TJ confirmed "funktioniert"**
 - [x] **v0.3.4** — Auto-Update laedt + installiert selbst (Download → NSIS spawn → App quit → Replace → Restart)
+- [x] **v0.3.5** — Orb-Overlay-Preview (Verlet-Spheren, 3-Punkte-Picker, Hover-Satellites, hinter Settings-Toggle)
+- [x] **v0.3.6** — Orb ist Default + Right-Click-Drag-to-Move + Settings-Tab "Overlay" (Theme/Position/Pulse)
+- [x] **v0.3.7** — Searchable Language-Picker mit 99 Sprachen (statt 5-Cycle)
+- [x] **v0.3.8** — Mic-Device-Picker + gentler Idle-Physik + Pulse-Toggle wirkt
 - [x] **AI-Cleanup** ist bereits drin (Claude Haiku via OpenRouter, "tidy"/"formal"-Stil) — Settings-Toggle aktivieren
 
-## 🔨 v0.4 — Floating-Overlay (Killer-Feature, in Arbeit)
-- [ ] **Orb-Overlay** statt simple Bubble — schwebende Glaspheren mit Verlet-Physik, reagieren auf Mic-Pegel
-- [ ] **3-Punkte-Picker** an der Orb (Hover): links Sprache, rechts Tonalitaet, oben Local/Cloud-Toggle
-- [ ] **Idle-Pulse** — atmender Glow (entschieden: subtle ein, signalisiert "wach")
-- [ ] **Sprach-Picker** im Overlay mit Suche + 76+ Sprachen (Voicely-Inspired)
-- [ ] **Personalisierung**: Position (4 Ecken / Custom-Drag), Groesse (S/M/L), Farbe (Cyan / Lila / Mint)
-- [ ] **Settings-Tab "Overlay"** mit Live-Preview
-- [ ] Klassische Bubble bleibt als Fallback-Option
+## 🔨 v0.4 — Floating-Overlay (Killer-Feature)
+- [x] **Orb-Overlay** statt simple Bubble — schwebende Glaspheren mit Verlet-Physik, reagieren auf Mic-Pegel
+- [x] **3-Punkte-Picker** an der Orb (Hover): links Sprache, rechts Tonalitaet, oben Local/Cloud-Toggle
+- [x] **Idle-Pulse** — atmender Glow (subtle, abschaltbar via Settings)
+- [x] **Sprach-Picker** im Overlay mit Suche + 99 Sprachen
+- [x] **Personalisierung**: Position (4 Ecken / Custom-Drag) + Farbe (Cyan / Violet / Mint)
+- [x] **Settings-Tab "Overlay"**
+- [x] Klassische Bubble bleibt als Fallback-Option (mutually exclusive)
+- [ ] **Glas-Effekt verfeinern** — TJ-Feedback ausstehend
+- [ ] **Click-through wenn nicht hovered** — Orb soll nicht Klicks nach hinten blockieren
+- [ ] **Groesse** (S/M/L) in Settings (heute nur Default)
 
 ## 🔨 v0.5 — Mic-Polish
-- [ ] **Mic-Device-Picker** in Settings (PyAudio-Enumeration)
+- [x] **Mic-Device-Picker** in Settings ✅ v0.3.8
 - [ ] **Live-Level-Meter** zum Test direkt darunter
 - [ ] **Audio-Vis-Styles**: Wellen / Faeden / Klassisch (im Overlay umschaltbar)
 - [ ] **Subtle-Sound** beim Hotkey-Press (custom WAV, hochwertig, nicht penetrant)
