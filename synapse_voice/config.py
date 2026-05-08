@@ -43,6 +43,11 @@ class Config:
     target_lock: bool = True
     show_bubble: bool = True
 
+    # v0.5: Mic-device picker. Empty string = system default. Otherwise
+    # the device name (we resolve to the index at startup so a hardware
+    # change doesn't pin to a stale index).
+    mic_device_name: str = ""
+
     # v0.4: Orb overlay (Voicely-style floating glass spheres). The new
     # default visual feedback layer — replaces the simple Bubble. Disable
     # via Settings if you want the minimal old-style notifier back.

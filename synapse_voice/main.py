@@ -27,6 +27,24 @@ from .ui.tray import Tray
 _log = _get_logger(__name__)
 
 
+def _resolve_mic_device(name: str) -> Optional[int]:
+    """Map a saved mic-device name to a sounddevice index. Returns None if
+    the user hasn't picked one or the saved name no longer exists (we
+    silently fall back to the system default in that case)."""
+    if not name:
+        return None
+    try:
+        from .recorder import list_input_devices
+
+        for d in list_input_devices():
+            if d["name"] == name:
+                return d["index"]
+    except Exception:
+        pass
+    _log.warning("Saved mic device %r not found — using system default", name)
+    return None
+
+
 class _PrewarmWorker(QObject):
     """Lazily load the faster-whisper model on a worker thread at startup
     so the first hotkey press doesn't pay the model-load cost."""
@@ -97,7 +115,7 @@ class SynapseVoiceApp(QObject):
     def __init__(self) -> None:
         super().__init__()
         self.config = Config.load()
-        self.recorder = Recorder()
+        self.recorder = Recorder(device=_resolve_mic_device(self.config.mic_device_name))
         self.target: WindowTarget | None = None
         self._active_threads: list[tuple[QThread, "TranscribeWorker"]] = []
         self._last_audio_seconds: float = 0.0

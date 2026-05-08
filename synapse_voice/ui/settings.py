@@ -278,6 +278,24 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.row_autostart)
 
         layout.addSpacing(6)
+        layout.addWidget(_section_title("Microphone"))
+        from ..recorder import list_input_devices
+
+        self.mic_combo = QComboBox()
+        self.mic_combo.addItem("System default", "")
+        for d in list_input_devices():
+            self.mic_combo.addItem(d["name"], d["name"])
+        idx = self.mic_combo.findData(self.config.mic_device_name or "")
+        if idx >= 0:
+            self.mic_combo.setCurrentIndex(idx)
+        layout.addWidget(self.mic_combo)
+        layout.addWidget(_hint(
+            "Pick the input device used for recording. Restart the app "
+            "after changing — the active stream is bound to the device "
+            "at startup."
+        ))
+
+        layout.addSpacing(6)
         layout.addWidget(_section_title("Recording mode"))
         self.recording_mode_combo = QComboBox()
         self.recording_mode_combo.addItem("Toggle — press to start, press again to stop", "toggle")
@@ -761,6 +779,7 @@ class SettingsDialog(QDialog):
         config.orb_position = self.orb_position_combo.currentData() or "bottom-right"
         config.orb_idle_pulse = self.row_orb_pulse.is_on()
         config.recording_mode = self.recording_mode_combo.currentData() or "toggle"
+        config.mic_device_name = self.mic_combo.currentData() or ""
         config.cleanup_enabled = self.row_cleanup.is_on()
         config.cleanup_style = self.cleanup_style_combo.currentData() or "tidy"
         config.auto_update_check = self.row_auto_update.is_on()

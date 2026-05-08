@@ -12,9 +12,42 @@ import sounddevice as sd
 SAMPLE_RATE = 16000  # Whisper expects 16kHz mono
 
 
+def list_input_devices() -> list[dict]:
+    """Enumerate input-capable audio devices. Returns dicts with at least
+    name, max_input_channels, default_samplerate, and a stable index. Used
+    by the Settings dialog to populate the mic-picker."""
+    out = []
+    try:
+        for i, dev in enumerate(sd.query_devices()):
+            if int(dev.get("max_input_channels", 0)) <= 0:
+                continue
+            out.append(
+                {
+                    "index": i,
+                    "name": dev.get("name", f"Device {i}"),
+                    "max_input_channels": int(dev.get("max_input_channels", 0)),
+                    "default_samplerate": int(dev.get("default_samplerate", 0)),
+                    "hostapi": dev.get("hostapi", 0),
+                }
+            )
+    except Exception as e:
+        print(f"[recorder] list_input_devices failed: {e}", flush=True)
+    return out
+
+
+def default_input_device() -> Optional[int]:
+    try:
+        return int(sd.default.device[0])
+    except Exception:
+        return None
+
+
 class Recorder:
-    def __init__(self, sample_rate: int = SAMPLE_RATE) -> None:
+    def __init__(
+        self, sample_rate: int = SAMPLE_RATE, device: Optional[int] = None
+    ) -> None:
         self.sample_rate = sample_rate
+        self.device = device  # None = system default
         self._stream: Optional[sd.InputStream] = None
         self._chunks: list[np.ndarray] = []
         self._lock = threading.Lock()
@@ -48,6 +81,7 @@ class Recorder:
             channels=1,
             dtype="float32",
             callback=self._callback,
+            device=self.device,
         )
         self._stream.start()
         self._recording = True

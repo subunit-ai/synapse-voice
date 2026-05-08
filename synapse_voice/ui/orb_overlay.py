@@ -221,18 +221,28 @@ class OrbOverlay(QWidget):
     def _step_physics(self) -> None:
         cx = cy = self.ORB_RADIUS + self.PADDING
 
-        # Idle target radius breathes slightly; audio expands it outward.
-        idle_breath = (
-            self.ORB_RADIUS * 0.55
-            + 2.0 * math.sin(self._pulse_phase)
-        )
+        # Idle target radius breathes slightly (only if pulse is enabled);
+        # audio always expands it outward regardless.
+        if self.config.orb_idle_pulse:
+            idle_breath = (
+                self.ORB_RADIUS * 0.55 + 1.4 * math.sin(self._pulse_phase)
+            )
+        else:
+            idle_breath = self.ORB_RADIUS * 0.55
         audio_push = self._level_smooth * (self.ORB_RADIUS - 12)
         target_r = idle_breath + audio_push
 
+        # Idle motion is much gentler than active. Boost only with audio.
+        idle_factor = 0.4 if self._state == "idle" else 1.0
+        drift_strength = 0.06 * idle_factor + self._level_smooth * 0.18
+        wobble_strength = 0.04 * idle_factor + self._level_smooth * 0.10
+
         for s in self._spheres:
-            # Verlet integration
-            vx = (s.x - s.px) * 0.94
-            vy = (s.y - s.py) * 0.94
+            # Verlet integration with stronger dampening when idle so the
+            # cluster doesn't drift around the screen on its own.
+            damp = 0.88 if self._state == "idle" else 0.94
+            vx = (s.x - s.px) * damp
+            vy = (s.y - s.py) * damp
             s.px, s.py = s.x, s.y
 
             # Soft pull toward target ring
@@ -245,13 +255,13 @@ class OrbOverlay(QWidget):
             ax = (tx - s.x) * 0.04
             ay = (ty - s.y) * 0.04
 
-            # Tiny tangential drift so the cluster stirs
-            ax += -ndy * 0.15 * (1 + self._level_smooth * 2)
-            ay += ndx * 0.15 * (1 + self._level_smooth * 2)
+            # Tangential drift — idle = barely-there; active = lively
+            ax += -ndy * drift_strength
+            ay += ndx * drift_strength
 
-            # Slight per-sphere wobble for organic feel
-            ax += math.cos(self._pulse_phase * 1.3 + s.phase) * 0.08
-            ay += math.sin(self._pulse_phase * 1.7 + s.phase) * 0.08
+            # Per-sphere phase wobble for organic feel
+            ax += math.cos(self._pulse_phase * 1.3 + s.phase) * wobble_strength
+            ay += math.sin(self._pulse_phase * 1.7 + s.phase) * wobble_strength
 
             s.x += vx + ax
             s.y += vy + ay
