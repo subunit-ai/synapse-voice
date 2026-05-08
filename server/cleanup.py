@@ -9,6 +9,9 @@ without changing the speaker's actual content.
 Configurable via STYLE:
   - "tidy"   (default): light cleanup, keeps wording
   - "formal": rewrite into business-formal tone
+  - "prompt": rewrite messy spoken prompt → structured AI prompt
+  - "email" : rewrite into a polite, well-structured email
+  - "slack" : rewrite into a short, casual chat message
   - "raw"   : passthrough (no cleanup, used for the disabled toggle path)
 """
 from __future__ import annotations
@@ -44,9 +47,51 @@ PROMPTS: dict[str, str] = {
         "  - keep the same language as the input\n"
         "Return ONLY the cleaned text. No commentary, no quotes, no preamble."
     ),
+    "prompt": (
+        "You are a prompt-engineering assistant. The user dictated a rough "
+        "request to a speech-to-text system, intending to send it to an AI "
+        "(Claude / GPT / coding agent). Rewrite the dictation into a clean, "
+        "well-structured prompt:\n"
+        "  - keep the speaker's intent + every concrete detail (names, paths, "
+        "    versions, constraints, edge cases)\n"
+        "  - drop filler, false starts, self-corrections — keep the corrected "
+        "    version\n"
+        "  - structure: 1-line goal at the top, then bullet points for "
+        "    constraints / requirements / context if there is more than one\n"
+        "  - if the speaker mentions code, file paths, or commands, format "
+        "    them with backticks\n"
+        "  - if the speaker is asking for code: end with a 1-line success "
+        "    criterion (\"so that …\" or \"such that …\")\n"
+        "  - keep the speaker's language (German prompts stay German)\n"
+        "  - DO NOT add information the speaker did not provide\n"
+        "  - DO NOT answer the prompt — only rewrite it\n"
+        "Return ONLY the rewritten prompt. No commentary, no preamble, "
+        "no quotation marks around it."
+    ),
+    "email": (
+        "You are a transcription cleanup assistant. The user dictated an "
+        "email body to a speech-to-text system. Your job:\n"
+        "  - structure into a clear opener / body / closer\n"
+        "  - polite, professional tone, but not stiff\n"
+        "  - remove fillers + spoken-only artefacts\n"
+        "  - keep every concrete detail; do not invent any\n"
+        "  - keep the speaker's language\n"
+        "Return ONLY the cleaned email body. No subject line, no commentary."
+    ),
+    "slack": (
+        "You are a transcription cleanup assistant. The user dictated a "
+        "short chat message (Slack / Telegram / Teams) to a speech-to-text "
+        "system. Your job:\n"
+        "  - keep it short, casual, direct — like a real chat\n"
+        "  - one or two sentences, no greeting + sign-off\n"
+        "  - drop fillers + repeats\n"
+        "  - emoji are OK if the speaker mentioned one\n"
+        "  - keep the speaker's language + tone\n"
+        "Return ONLY the cleaned message. No commentary, no quotes."
+    ),
 }
 
-Style = Literal["tidy", "formal", "raw"]
+Style = Literal["tidy", "formal", "prompt", "email", "slack", "raw"]
 
 
 class CleanupError(RuntimeError):

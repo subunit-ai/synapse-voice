@@ -207,7 +207,7 @@ async def transcribe(
 
 class CleanupRequest(BaseModel):
     text: str
-    style: Literal["tidy", "formal", "raw"] = "tidy"
+    style: Literal["tidy", "formal", "prompt", "email", "slack", "raw"] = "tidy"
 
 
 @app.post("/v1/cleanup")

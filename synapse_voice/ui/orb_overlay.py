@@ -431,6 +431,9 @@ class OrbOverlay(QWidget):
                 options=[
                     ("off", "Off"),
                     ("tidy", "Tidy"),
+                    ("prompt", "Prompt"),
+                    ("email", "Email"),
+                    ("slack", "Slack"),
                     ("formal", "Formal"),
                 ],
                 current=current,
@@ -453,7 +456,7 @@ class OrbOverlay(QWidget):
     def _pick_style(self, choice: str) -> None:
         if choice == "off":
             self.config.cleanup_enabled = False
-        elif choice in ("tidy", "formal"):
+        elif choice in ("tidy", "prompt", "email", "slack", "formal"):
             self.config.cleanup_enabled = True
             self.config.cleanup_style = choice
         else:

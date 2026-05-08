@@ -128,6 +128,9 @@ _LANG_DE: dict[str, str] = {
     "orb.cleanup.title": "Cleanup",
     "orb.cleanup.off": "Aus",
     "orb.cleanup.tidy": "Bereinigen",
+    "orb.cleanup.prompt": "Prompt",
+    "orb.cleanup.email": "E-Mail",
+    "orb.cleanup.slack": "Slack",
     "orb.cleanup.formal": "Formal",
 }
 
@@ -241,6 +244,9 @@ _LANG_EN: dict[str, str] = {
     "orb.cleanup.title": "Cleanup",
     "orb.cleanup.off": "Off",
     "orb.cleanup.tidy": "Tidy",
+    "orb.cleanup.prompt": "Prompt",
+    "orb.cleanup.email": "Email",
+    "orb.cleanup.slack": "Slack",
     "orb.cleanup.formal": "Formal",
 }
 
