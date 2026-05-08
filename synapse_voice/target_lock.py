@@ -73,10 +73,18 @@ def focus_window(target: WindowTarget) -> bool:
 def _win_focus(hwnd: int) -> bool:
     """Bring an HWND to the foreground.
 
-    Windows blocks SetForegroundWindow from foreign processes for security, so
-    we use the AttachThreadInput trick: attach our thread's input queue to the
-    foreground window's thread, set the focus, then detach. Also restore the
-    window from minimized if needed.
+    Windows blocks SetForegroundWindow from foreign processes for security.
+    Stack of workarounds, in order:
+      1. Restore window from minimized.
+      2. AllowSetForegroundWindow(ASFW_ANY).
+      3. The Alt-tap trick: simulate Alt down/up. This makes Windows treat
+         our process as if the user just interacted, which lifts the
+         foreground-lock for ~5 seconds.
+      4. AttachThreadInput to the foreground window's thread.
+      5. BringWindowToTop + SetForegroundWindow + SetActiveWindow + SetFocus
+         (one of these usually sticks once 1-4 are in place).
+      6. Detach.
+    Then sleep 150ms so the focus actually propagates before paste fires.
     """
     import ctypes
     from ctypes import wintypes
@@ -84,30 +92,54 @@ def _win_focus(hwnd: int) -> bool:
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
 
-    # Restore if minimized
     SW_RESTORE = 9
     if user32.IsIconic(hwnd):
         user32.ShowWindow(hwnd, SW_RESTORE)
 
-    # AllowSetForegroundWindow first — works in some cases
     ASFW_ANY = -1
-    user32.AllowSetForegroundWindow.argtypes = [wintypes.DWORD]
-    user32.AllowSetForegroundWindow(ASFW_ANY & 0xFFFFFFFF)
+    try:
+        user32.AllowSetForegroundWindow.argtypes = [wintypes.DWORD]
+        user32.AllowSetForegroundWindow(ASFW_ANY & 0xFFFFFFFF)
+    except Exception:
+        pass
+
+    # Alt-tap trick — fakes user interaction, lifts the foreground-lock.
+    VK_MENU = 0x12  # Alt
+    KEYEVENTF_KEYUP = 0x0002
+    user32.keybd_event(VK_MENU, 0, 0, 0)
+    user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
 
     fg = user32.GetForegroundWindow()
     fg_thread = user32.GetWindowThreadProcessId(fg, None)
     my_thread = kernel32.GetCurrentThreadId()
-    attached = False
+    target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+    attached_fg = False
+    attached_target = False
     if fg_thread and fg_thread != my_thread:
-        attached = bool(user32.AttachThreadInput(my_thread, fg_thread, True))
+        attached_fg = bool(user32.AttachThreadInput(my_thread, fg_thread, True))
+    if target_thread and target_thread != my_thread and target_thread != fg_thread:
+        attached_target = bool(
+            user32.AttachThreadInput(my_thread, target_thread, True)
+        )
     try:
         user32.BringWindowToTop(hwnd)
-        result = bool(user32.SetForegroundWindow(hwnd))
+        ok = bool(user32.SetForegroundWindow(hwnd))
+        user32.SetActiveWindow(hwnd)
+        user32.SetFocus(hwnd)
     finally:
-        if attached:
+        if attached_fg:
             user32.AttachThreadInput(my_thread, fg_thread, False)
-    time.sleep(0.05)
-    return result
+        if attached_target:
+            user32.AttachThreadInput(my_thread, target_thread, False)
+
+    # Give Windows time to repaint + transfer focus.
+    time.sleep(0.15)
+
+    # Verify: did the focus actually land where we wanted? If yes → success
+    # regardless of what SetForegroundWindow's return code claimed.
+    if user32.GetForegroundWindow() == hwnd:
+        return True
+    return ok
 
 
 def set_clipboard(text: str) -> bool:
