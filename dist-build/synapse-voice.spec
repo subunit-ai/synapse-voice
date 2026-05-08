@@ -11,15 +11,27 @@
 # Build (Windows): same command, .exe is produced.
 
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 block_cipher = None
 ROOT = Path(SPECPATH).parent
 
+# faster-whisper ships the silero VAD model + tokenizer files as package data —
+# PyInstaller's static analysis misses them, so bundle the whole package data tree.
+extra_datas = []
+extra_datas += collect_data_files("faster_whisper")
+extra_datas += collect_data_files("tokenizers")
+# ctranslate2 + onnxruntime ship native shared libs that aren't picked up unless
+# we explicitly collect them.
+extra_binaries = []
+extra_binaries += collect_dynamic_libs("ctranslate2")
+extra_binaries += collect_dynamic_libs("onnxruntime")
+
 a = Analysis(
     [str(ROOT / "dist-build" / "entrypoint.py")],
     pathex=[str(ROOT)],
-    binaries=[],
-    datas=[],
+    binaries=extra_binaries,
+    datas=extra_datas,
     hiddenimports=[
         "synapse_voice",
         "synapse_voice.transcriber",
