@@ -327,6 +327,20 @@ class SettingsDialog(QDialog):
         ))
 
         layout.addSpacing(6)
+        layout.addWidget(_section_title("Theme"))
+        self.ui_theme_combo = QComboBox()
+        self.ui_theme_combo.addItem("Dark (default)", "dark")
+        self.ui_theme_combo.addItem("Light", "light")
+        idx = self.ui_theme_combo.findData(self.config.ui_theme or "dark")
+        if idx >= 0:
+            self.ui_theme_combo.setCurrentIndex(idx)
+        layout.addWidget(self.ui_theme_combo)
+        layout.addWidget(_hint(
+            "Dark uses the Subunit brand palette (deep navy + cyan). "
+            "Light is for daylight desks."
+        ))
+
+        layout.addSpacing(6)
         layout.addWidget(_section_title("Microphone"))
         from ..recorder import list_input_devices
         from .mic_meter import MicLevelMeter
@@ -918,6 +932,15 @@ class SettingsDialog(QDialog):
             config.ui_language = new_ui_lang
             from .. import i18n
             i18n.set_language(new_ui_lang)
+        new_ui_theme = self.ui_theme_combo.currentData() or "dark"
+        if new_ui_theme != config.ui_theme:
+            config.ui_theme = new_ui_theme
+            try:
+                from PyQt6.QtWidgets import QApplication
+                from .. import theme as _theme
+                _theme.apply(QApplication.instance(), new_ui_theme)
+            except Exception:
+                pass
         # v0.3.9 Lexikon: harvest vocab table into list[dict]
         if hasattr(self, "vocab_table"):
             config.vocabulary = self._harvest_vocab()

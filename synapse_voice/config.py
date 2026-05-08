@@ -88,6 +88,18 @@ class Config:
     # Doesn't affect transcription language — that's `language` above.
     ui_language: str = "de"
 
+    # v0.3.21: UI theme — applies a Qt palette across the whole app. Dark
+    # is the brand default (matches Marketing site + Voicely-style chrome);
+    # Light is for users who prefer a bright IDE look.
+    ui_theme: str = "dark"  # dark | light
+
+    # v0.3.21: Plan + trial state — populated when the user signs in via
+    # Onboarding. The server is the source of truth (we re-fetch via
+    # /v1/account/info on launch); these are cached locally so we can
+    # render the badge without a round-trip.
+    plan: str = "free"  # free | trial | pro
+    trial_started_at: int = 0  # unix seconds, 0 = never started
+
     # v0.4: Subtle UI sounds — start ping on record, pop on done.
     sound_enabled: bool = True
     sound_volume: float = 0.6  # 0.0..1.0

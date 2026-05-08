@@ -126,6 +126,11 @@ class SynapseVoiceApp(QObject):
         # built so first-render strings reflect the user's language.
         from . import i18n
         i18n.set_language(self.config.ui_language or "de")
+        # v0.3.21: apply theme palette before any widget paints. Theme is
+        # an app-level concern so we set it on the QApplication once here
+        # (and again on Settings-save if the user toggles it).
+        from . import theme
+        theme.apply(QApplication.instance(), self.config.ui_theme or "dark")
         self.recorder = Recorder(device=_resolve_mic_device(self.config.mic_device_name))
         self.target: WindowTarget | None = None
         self._active_threads: list[tuple[QThread, "TranscribeWorker"]] = []
@@ -484,8 +489,20 @@ class SynapseVoiceApp(QObject):
             self.config.hotkey = settings.get("hotkey") or self.config.hotkey
             new_mode = settings.get("mode") or self.config.mode
             self.config.ui_language = settings.get("ui_language") or self.config.ui_language
-            from . import i18n
+            # v0.3.21: account + theme + trial
+            new_theme = settings.get("ui_theme") or self.config.ui_theme
+            self.config.ui_theme = new_theme
+            self.config.account_email = settings.get("account_email", "") or self.config.account_email
+            sub_key = settings.get("subunit_api_key", "")
+            if sub_key:
+                self.config.subunit_api_key = sub_key
+            self.config.plan = settings.get("plan") or self.config.plan
+            trial_ts = settings.get("trial_started_at") or 0
+            if trial_ts:
+                self.config.trial_started_at = trial_ts
+            from . import i18n, theme as _theme
             i18n.set_language(self.config.ui_language)
+            _theme.apply(QApplication.instance(), self.config.ui_theme)
             if new_mode != self.config.mode:
                 # Route via change_mode so cache invalidation + tray update happens
                 self.change_mode(new_mode)

@@ -287,9 +287,16 @@ class OnboardingDialog(QDialog):
             "hotkey": config.hotkey,
             "mode": config.mode,
             "ui_language": config.ui_language or "de",
+            "ui_theme": config.ui_theme or "dark",
+            "account_email": config.account_email or "",
+            "subunit_api_key": config.subunit_api_key or "",
+            "plan": config.plan or "free",
+            "trial_started_at": config.trial_started_at or 0,
         }
         # Live-key tracking for the Hotkey page's KeyVisualizer
         self._pressed_keys: set[str] = set()
+        # Account-step state (worker thread for /sign-up)
+        self._signup_thread = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(36, 28, 36, 24)
@@ -315,8 +322,17 @@ class OnboardingDialog(QDialog):
         head.addWidget(self.lang_toggle, 0, Qt.AlignmentFlag.AlignTop)
         outer.addLayout(head)
 
+        # Pages — built first so we know how many step-dots to render.
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self._build_welcome())
+        self.stack.addWidget(self._build_account())
+        self.stack.addWidget(self._build_theme())
+        self.stack.addWidget(self._build_hotkey())
+        self.stack.addWidget(self._build_mode())
+        self.stack.addWidget(self._build_test())
+
         # Step indicator
-        self._dots = [_StepDot() for _ in range(4)]
+        self._dots = [_StepDot() for _ in range(self.stack.count())]
         dot_row = QHBoxLayout()
         dot_row.setSpacing(8)
         dot_row.addStretch()
@@ -325,12 +341,6 @@ class OnboardingDialog(QDialog):
         dot_row.addStretch()
         outer.addLayout(dot_row)
 
-        # Pages
-        self.stack = QStackedWidget()
-        self.stack.addWidget(self._build_welcome())
-        self.stack.addWidget(self._build_hotkey())
-        self.stack.addWidget(self._build_mode())
-        self.stack.addWidget(self._build_test())
         outer.addWidget(self.stack, 1)
 
         # Footer nav
@@ -429,6 +439,141 @@ class OnboardingDialog(QDialog):
             anim.setEasingCurve(QEasingCurve.Type.OutCubic)
             QTimer.singleShot(80 * i, anim.start)
             self._welcome_anims.append(anim)
+
+    def _build_account(self) -> QWidget:
+        page = QWidget()
+        l = QVBoxLayout(page)
+        l.setContentsMargins(0, 14, 0, 14)
+        l.setSpacing(14)
+
+        self._acc_title = QLabel(tr("onb.account.title"))
+        self._acc_title.setObjectName("h1")
+        self._acc_title.setStyleSheet("font-size: 22px;")
+        l.addWidget(self._acc_title)
+
+        self._acc_sub = QLabel(tr("onb.account.sub"))
+        self._acc_sub.setObjectName("dim")
+        self._acc_sub.setWordWrap(True)
+        l.addWidget(self._acc_sub)
+
+        # Email field
+        from PyQt6.QtWidgets import QLineEdit, QFrame
+
+        self._acc_email_lbl = QLabel(tr("onb.account.email_label"))
+        self._acc_email_lbl.setObjectName("dim")
+        l.addWidget(self._acc_email_lbl)
+
+        self._acc_email = QLineEdit()
+        self._acc_email.setPlaceholderText(tr("onb.account.email_placeholder"))
+        self._acc_email.setText(self._working.get("account_email", ""))
+        self._acc_email.setStyleSheet(
+            "QLineEdit { font-size: 15px; padding: 10px 14px; "
+            "background: rgba(255,255,255,0.04); "
+            "border: 1px solid rgba(255,255,255,0.10); border-radius: 8px; "
+            "color: #e2e8f0; } "
+            "QLineEdit:focus { border-color: #06b6d4; }"
+        )
+        self._acc_email.returnPressed.connect(self._on_signup_clicked)
+        l.addWidget(self._acc_email)
+
+        # Sign-up button (primary) + skip (ghost)
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        self._acc_signup_btn = QPushButton(tr("onb.account.btn.signup"))
+        self._acc_signup_btn.setObjectName("primary")
+        self._acc_signup_btn.setStyleSheet(
+            "QPushButton#primary { font-weight: 700; padding: 10px 18px; }"
+        )
+        self._acc_signup_btn.clicked.connect(self._on_signup_clicked)
+        btn_row.addWidget(self._acc_signup_btn, 1)
+        l.addLayout(btn_row)
+
+        # Status (hidden until we have something to say)
+        self._acc_status = QLabel("")
+        self._acc_status.setObjectName("dim")
+        self._acc_status.setWordWrap(True)
+        self._acc_status.setStyleSheet("padding: 4px 0;")
+        l.addWidget(self._acc_status)
+
+        # Benefit list — three short rows with cyan dot prefixes
+        l.addSpacing(8)
+        self._acc_benefits = []
+        for key in (
+            "onb.account.benefit.privacy",
+            "onb.account.benefit.eu",
+            "onb.account.benefit.cancel",
+        ):
+            row = QHBoxLayout()
+            row.setSpacing(10)
+            dot = QLabel("●")
+            dot.setStyleSheet("color: #06b6d4; font-size: 14px;")
+            row.addWidget(dot)
+            txt = QLabel(tr(key))
+            txt.setObjectName("dim")
+            txt.setWordWrap(True)
+            row.addWidget(txt, 1)
+            l.addLayout(row)
+            self._acc_benefits.append((key, txt))
+
+        # Skip link at the bottom
+        l.addStretch()
+        self._acc_skip_btn = QPushButton(tr("onb.account.btn.skip"))
+        self._acc_skip_btn.setObjectName("ghost")
+        self._acc_skip_btn.setStyleSheet(
+            "QPushButton#ghost { color: #94a3b8; padding: 6px 0; "
+            "background: transparent; border: none; text-decoration: underline; }"
+            "QPushButton#ghost:hover { color: #cbd5e1; }"
+        )
+        self._acc_skip_btn.clicked.connect(self._on_account_skip)
+        l.addWidget(self._acc_skip_btn, 0, Qt.AlignmentFlag.AlignCenter)
+
+        return page
+
+    def _build_theme(self) -> QWidget:
+        page = QWidget()
+        l = QVBoxLayout(page)
+        l.setContentsMargins(0, 18, 0, 18)
+        l.setSpacing(18)
+
+        self._theme_title = QLabel(tr("onb.theme.title"))
+        self._theme_title.setObjectName("h1")
+        self._theme_title.setStyleSheet("font-size: 22px;")
+        l.addWidget(self._theme_title)
+
+        self._theme_sub = QLabel(tr("onb.theme.sub"))
+        self._theme_sub.setObjectName("dim")
+        self._theme_sub.setWordWrap(True)
+        l.addWidget(self._theme_sub)
+
+        # Cards row
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(14)
+
+        self._theme_dark_card = ModeCard(
+            icon="🌙",
+            title=tr("onb.theme.dark"),
+            subtitle="",
+            body=tr("onb.theme.dark.body"),
+            badge="Default",
+        )
+        self._theme_dark_card.clicked.connect(lambda: self._pick_theme("dark"))
+        cards_row.addWidget(self._theme_dark_card)
+
+        self._theme_light_card = ModeCard(
+            icon="☀",
+            title=tr("onb.theme.light"),
+            subtitle="",
+            body=tr("onb.theme.light.body"),
+            badge="",
+        )
+        self._theme_light_card.clicked.connect(lambda: self._pick_theme("light"))
+        cards_row.addWidget(self._theme_light_card)
+
+        l.addLayout(cards_row)
+        l.addStretch()
+
+        self._sync_theme_cards()
+        return page
 
     def _build_hotkey(self) -> QWidget:
         page = QWidget()
@@ -585,6 +730,124 @@ class OnboardingDialog(QDialog):
         self._local_card.set_active(is_local)
         self._cloud_card.set_active(not is_local)
 
+    # ── Theme picker ───────────────────────────────────────────────────────
+
+    def _pick_theme(self, theme_name: str) -> None:
+        self._working["ui_theme"] = theme_name
+        self._sync_theme_cards()
+        # Apply live so the user sees what they're getting before clicking Next
+        try:
+            from PyQt6.QtWidgets import QApplication
+            from .. import theme as _theme
+            _theme.apply(QApplication.instance(), theme_name)
+        except Exception:
+            pass
+
+    def _sync_theme_cards(self) -> None:
+        is_dark = self._working.get("ui_theme", "dark") == "dark"
+        self._theme_dark_card.set_active(is_dark)
+        self._theme_light_card.set_active(not is_dark)
+
+    # ── Account sign-up ────────────────────────────────────────────────────
+
+    def _on_signup_clicked(self) -> None:
+        email = (self._acc_email.text() or "").strip()
+        if "@" not in email or "." not in email or len(email) < 5:
+            self._set_account_status(tr("onb.account.invalid"), error=True)
+            return
+        self._acc_signup_btn.setEnabled(False)
+        self._acc_email.setEnabled(False)
+        self._set_account_status(tr("onb.account.signing_up"), error=False)
+
+        # Send POST in a worker thread so we don't block the GUI
+        from PyQt6.QtCore import QThread, pyqtSignal as _sig
+
+        class _SignUpWorker(QObject):
+            done = _sig(dict)
+            failed = _sig(str)
+
+            def __init__(self, endpoint: str, email_: str) -> None:
+                super().__init__()
+                self.endpoint = endpoint
+                self.email = email_
+
+            def run(self) -> None:
+                try:
+                    import requests
+                    r = requests.post(
+                        self.endpoint,
+                        json={"email": self.email},
+                        timeout=20,
+                    )
+                    if r.status_code == 409:
+                        self.failed.emit("exists")
+                        return
+                    r.raise_for_status()
+                    self.done.emit(r.json())
+                except requests.HTTPError as e:
+                    self.failed.emit(f"http:{e.response.status_code}")
+                except requests.RequestException:
+                    self.failed.emit("network")
+                except Exception as e:
+                    self.failed.emit(f"unknown:{e}")
+
+        # Derive sign-up endpoint from the configured transcribe URL
+        transcribe_url = self.config.subunit_endpoint or ""
+        signup_url = transcribe_url.rsplit("/v1/", 1)[0] + "/v1/account/sign-up"
+
+        thread = QThread(self)
+        worker = _SignUpWorker(signup_url, email)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.done.connect(self._on_signup_ok)
+        worker.failed.connect(self._on_signup_fail)
+        worker.done.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        # Hold a reference so neither side gets GC'd mid-flight
+        self._signup_thread = (thread, worker)
+        thread.start()
+
+    def _on_signup_ok(self, result: dict) -> None:
+        # Persist email + key + plan + trial start time
+        import time as _t
+        self._working["account_email"] = result.get("email", "")
+        self._working["subunit_api_key"] = result.get("api_key", "")
+        # Server returns plan='free' on creation — locally we flip to 'trial'
+        # so the desktop app shows the 7-day countdown until v0.3.22 ships
+        # the proper /v1/account/subscribe + Stripe flow.
+        self._working["plan"] = "trial"
+        self._working["trial_started_at"] = int(_t.time())
+        # Default the user into Cloud mode after a successful signup —
+        # otherwise they paid the email step and stay on Local, which is
+        # the wrong default for someone who just opted into Subunit-Cloud.
+        self._working["mode"] = "subunit"
+        self._set_account_status(tr("onb.account.success"), error=False)
+        # Auto-advance after a short beat so they see the confirmation
+        QTimer.singleShot(900, lambda: self._sync_step(self.stack.currentIndex() + 1))
+
+    def _on_signup_fail(self, code: str) -> None:
+        self._acc_signup_btn.setEnabled(True)
+        self._acc_email.setEnabled(True)
+        if code == "exists":
+            self._set_account_status(tr("onb.account.exists"), error=True)
+        elif code == "network":
+            self._set_account_status(tr("onb.account.network_error"), error=True)
+        else:
+            self._set_account_status(f"⚠ {code}", error=True)
+
+    def _set_account_status(self, msg: str, error: bool) -> None:
+        self._acc_status.setText(msg)
+        color = "#f87171" if error else "#34d399"
+        self._acc_status.setStyleSheet(f"color: {color}; padding: 4px 0;")
+
+    def _on_account_skip(self) -> None:
+        # Mark explicitly skipped — no email, plan stays free, just advance
+        self._working["account_email"] = ""
+        self._working["plan"] = "free"
+        self._sync_step(self.stack.currentIndex() + 1)
+
     # ── Nav ────────────────────────────────────────────────────────────────
 
     def _sync_step(self, idx: int) -> None:
@@ -593,16 +856,21 @@ class OnboardingDialog(QDialog):
             d.set_state(reached=(i <= idx), active=(i == idx))
         self.back_btn.setVisible(idx > 0)
         is_last = idx == self.stack.count() - 1
-        self.next_btn.setText("Finish" if is_last else "Next")
+        self.next_btn.setText(tr("onb.btn.finish") if is_last else tr("onb.btn.next"))
         self.skip_btn.setVisible(not is_last)
         # Trigger the welcome cascade-fade when entering page 0
         if idx == 0:
             QTimer.singleShot(120, self._animate_welcome_in)
+        # Account page (idx 1) — only step where the user can hit a server
+        # so make sure the email field has focus on entry for fast typing
+        if idx == 1 and hasattr(self, "_acc_email"):
+            self._acc_email.setFocus()
 
     def _go_next(self) -> None:
         idx = self.stack.currentIndex()
-        # Persist the hotkey choice when leaving Step 1
-        if idx == 1:
+        # Persist the hotkey choice when leaving the Hotkey step (page 3 in
+        # the new 6-step flow: Welcome → Account → Theme → Hotkey → Mode → Test)
+        if idx == 3:
             captured = self._hotkey_btn.value()
             if captured:
                 self._working["hotkey"] = captured
@@ -662,7 +930,34 @@ class OnboardingDialog(QDialog):
         is_last = self.stack.currentIndex() == self.stack.count() - 1
         self.next_btn.setText(tr("onb.btn.finish") if is_last else tr("onb.btn.next"))
 
-        # Page 1 (Hotkey)
+        # Account page
+        if hasattr(self, "_acc_title"):
+            self._acc_title.setText(tr("onb.account.title"))
+            self._acc_sub.setText(tr("onb.account.sub"))
+            self._acc_email_lbl.setText(tr("onb.account.email_label"))
+            self._acc_email.setPlaceholderText(tr("onb.account.email_placeholder"))
+            self._acc_signup_btn.setText(tr("onb.account.btn.signup"))
+            self._acc_skip_btn.setText(tr("onb.account.btn.skip"))
+            for key, lbl in getattr(self, "_acc_benefits", []):
+                lbl.setText(tr(key))
+        # Theme page
+        if hasattr(self, "_theme_title"):
+            self._theme_title.setText(tr("onb.theme.title"))
+            self._theme_sub.setText(tr("onb.theme.sub"))
+            self._theme_dark_card.set_strings(
+                title=tr("onb.theme.dark"),
+                subtitle="",
+                body=tr("onb.theme.dark.body"),
+                badge="Default",
+            )
+            self._theme_light_card.set_strings(
+                title=tr("onb.theme.light"),
+                subtitle="",
+                body=tr("onb.theme.light.body"),
+                badge="",
+            )
+
+        # Hotkey page
         if hasattr(self, "_hotkey_title"):
             self._hotkey_title.setText(tr("onb.hotkey.title"))
             self._hotkey_sub.setText(tr("onb.hotkey.sub"))
