@@ -666,13 +666,15 @@ class SettingsDialog(QDialog):
         layout.addSpacing(6)
         layout.addWidget(_section_title("Position"))
         self.orb_position_combo = QComboBox()
+        self.orb_position_combo.addItem("Bottom-center (default)", "bottom-center")
         self.orb_position_combo.addItem("Bottom-right", "bottom-right")
         self.orb_position_combo.addItem("Bottom-left", "bottom-left")
+        self.orb_position_combo.addItem("Top-center", "top-center")
         self.orb_position_combo.addItem("Top-right", "top-right")
         self.orb_position_combo.addItem("Top-left", "top-left")
         # If user has dragged the orb to a custom spot, show "Custom" and
         # don't overwrite it unless they pick a corner.
-        cur_pos = self.config.orb_position or "bottom-right"
+        cur_pos = self.config.orb_position or "bottom-center"
         if cur_pos.startswith("custom-"):
             self.orb_position_combo.addItem(f"Custom ({cur_pos[7:]})", cur_pos)
         idx = self.orb_position_combo.findData(cur_pos)
@@ -861,7 +863,7 @@ class SettingsDialog(QDialog):
             else self.row_orb_overlay.is_on()
         )
         config.orb_color_theme = self.orb_theme_combo.currentData() or "cyan"
-        config.orb_position = self.orb_position_combo.currentData() or "bottom-right"
+        config.orb_position = self.orb_position_combo.currentData() or "bottom-center"
         config.orb_idle_pulse = self.row_orb_pulse.is_on()
         config.recording_mode = self.recording_mode_combo.currentData() or "toggle"
         config.mic_device_name = self.mic_combo.currentData() or ""

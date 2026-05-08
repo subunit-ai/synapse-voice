@@ -1,29 +1,28 @@
-"""Floating Orb overlay — v0.4 killer-feature.
+"""Floating Orb overlay — v0.3.11 redesign.
 
-Always-on-top circular widget that lives at the bottom-center (or any
-configurable corner) of the screen. Inside: 8 glass spheres bouncing
-under Verlet integration, gently breathing while idle, expanding +
-shimmering when the mic picks up audio. On hover, three satellite
-buttons fan out: language picker, tonality (cleanup style), and the
-local/cloud transcription mode toggle.
+A small, persistent dot that lives at the bottom-center of the screen.
+Subtle pulse while idle, color-coded reaction during recording /
+transcribing. Hover reveals 3 satellite dots fanning N / W / E for
+language / mode / cleanup-style. Each satellite either opens a popup
+picker (lang) or a tiny 2-bubble pill (mode / style) for visual choice.
 
-Replaces the simple `Bubble` notifier as the default visual feedback.
-The classic Bubble stays available behind a Settings toggle for users
-who prefer minimal UI.
+Replaces v0.3.5–v0.3.8's 9-sphere bouquet — TJ called the cluster
+"viel zu groß" + "dreht sich". This one is intentionally Voicely-sized:
+tiny dot with the smallest possible footprint, pop-out details only on
+demand.
 """
 from __future__ import annotations
 
 import math
-import random
-from dataclasses import dataclass
 from typing import Callable, Optional
 
 from PyQt6.QtCore import (
     QPoint,
+    QPropertyAnimation,
     QRect,
-    QSize,
     Qt,
     QTimer,
+    pyqtProperty,
 )
 from PyQt6.QtGui import (
     QBrush,
@@ -34,7 +33,7 @@ from PyQt6.QtGui import (
     QPen,
     QRadialGradient,
 )
-from PyQt6.QtWidgets import QApplication, QWidget
+from PyQt6.QtWidgets import QApplication, QGraphicsOpacityEffect, QWidget
 
 from ..config import Config
 from ..transcriber import CLOUD_MODES, mode_label
@@ -43,12 +42,12 @@ from ..transcriber import CLOUD_MODES, mode_label
 CYAN = QColor(64, 214, 255)
 DEEP_CYAN = QColor(20, 96, 130)
 NIGHT = QColor(2, 8, 23)
-NIGHT_DIM = QColor(8, 16, 30, 220)
-GLASS_HIGHLIGHT = QColor(255, 255, 255, 190)
+GLASS_DARK = QColor(8, 16, 30, 235)
 GLASS_RIM = QColor(255, 255, 255, 90)
 WHITE = QColor(255, 255, 255)
-WHITE_DIM = QColor(255, 255, 255, 180)
+WHITE_DIM = QColor(255, 255, 255, 200)
 RED = QColor(255, 88, 92)
+GREEN = QColor(80, 220, 130)
 
 
 COLOR_THEMES = {
@@ -58,35 +57,17 @@ COLOR_THEMES = {
 }
 
 
-@dataclass
-class _Sphere:
-    """Verlet-integrated sphere body. Carries current + previous position so
-    velocity is implicit (pos - prev_pos = velocity). Cheap, stable, no
-    explicit dampening needed beyond a small velocity scaling per tick.
-    """
-
-    x: float
-    y: float
-    px: float
-    py: float
-    radius: float
-    phase: float  # for shimmer / drift variation
-
-
 class OrbOverlay(QWidget):
-    """The persistent floating orb. State machine mirrors Bubble's: idle,
-    recording, transcribing, done, error. Visual reaction differs per state:
-        idle         — slow breathing pulse, spheres drift
-        recording    — RED rim, spheres pushed outward by audio level
-        transcribing — CYAN shimmer, spheres swirl
-        done         — green flash → fade back to idle
-        error        — yellow flash → fade back to idle
+    """Tiny dot, big behaviour. ~28px core, ~98px total window
+    (room for halo + satellites). Every pixel here is intentional —
+    bigger and it dominates the desktop, smaller and the satellites
+    get unclickable.
     """
 
-    SPHERE_COUNT = 9
-    ORB_RADIUS = 50  # the inner orb area (sphere container)
-    PADDING = 22  # space around the orb for halo + satellite buttons
-    BUTTON_RADIUS = 18  # satellite-button radius
+    DOT_RADIUS = 14            # the visible orb itself (~28px diameter)
+    PADDING = 38               # room around the orb for halo + satellites
+    SAT_RADIUS = 9             # satellite dot radius
+    SAT_DISTANCE = 26          # satellite distance from orb center
 
     def __init__(self, config: Config, on_change_mode: Callable[[str], None]) -> None:
         super().__init__()
@@ -100,6 +81,11 @@ class OrbOverlay(QWidget):
         self._hovered = False
         self._theme = config.orb_color_theme or "cyan"
         self._drag_origin: Optional[QPoint] = None
+        # Currently-open sub-popup (mode/style/lang) so we can close it
+        # if the user clicks elsewhere.
+        self._popup: Optional[QWidget] = None
+        self._satellite_opacity = 0.0  # animated 0..1 fade for satellites
+
         self.setMouseTracking(True)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -109,24 +95,15 @@ class OrbOverlay(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        # NOTE on click-through: by default the orb captures clicks so the
-        # 3-button picker can react to hover/click. To prevent it from
-        # blocking clicks on whatever lies behind it, we shrink the orb
-        # widget to its visible rect — the user can still click "around"
-        # the orb via the screen area outside our ~140px window.
 
-        # Resize: orb area + padding * 2 for halo + satellite reach
-        side = (self.ORB_RADIUS + self.PADDING) * 2
+        side = (self.DOT_RADIUS + self.PADDING) * 2
         self.resize(side, side)
 
-        self._spheres: list[_Sphere] = self._spawn_spheres()
-
         self._tick = QTimer(self)
-        self._tick.setInterval(33)  # ~30fps
+        self._tick.setInterval(33)
         self._tick.timeout.connect(self._on_tick)
         self._tick.start()
 
-        # Move to default position (bottom-center of cursor's screen)
         self._reposition()
 
     # ── Public API ─────────────────────────────────────────────────────────
@@ -138,7 +115,6 @@ class OrbOverlay(QWidget):
         self._state = state
         if not self.isVisible():
             self.show()
-        # done/error briefly flash, then revert to idle.
         if state in ("done", "error"):
             QTimer.singleShot(900, lambda: self._maybe_reset_state(state))
 
@@ -150,15 +126,12 @@ class OrbOverlay(QWidget):
     # ── Geometry / placement ───────────────────────────────────────────────
 
     def _reposition(self) -> None:
-        """Place the orb according to config.orb_position. Supported values:
-        "bottom-right" / "bottom-left" / "top-right" / "top-left" or
-        "custom-X-Y" where X and Y are screen-relative pixel offsets set
-        via drag-to-move.
-        """
+        """Place the orb according to config.orb_position. Default is
+        bottom-center (TJ explicitly asked for mittig, not corner)."""
         screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         rect = screen.availableGeometry()
-        margin = 24
-        pos = (self.config.orb_position or "bottom-right").strip()
+        margin = 20
+        pos = (self.config.orb_position or "bottom-center").strip()
 
         if pos.startswith("custom-"):
             try:
@@ -168,43 +141,26 @@ class OrbOverlay(QWidget):
                 self.move(x, y)
                 return
             except (ValueError, IndexError):
-                pass  # fall through to default corner
+                pass
 
         if pos == "top-left":
-            x = rect.x() + margin
-            y = rect.y() + margin
+            x, y = rect.x() + margin, rect.y() + margin
         elif pos == "top-right":
-            x = rect.x() + rect.width() - self.width() - margin
+            x, y = rect.x() + rect.width() - self.width() - margin, rect.y() + margin
+        elif pos == "top-center":
+            x = rect.x() + (rect.width() - self.width()) // 2
             y = rect.y() + margin
         elif pos == "bottom-left":
-            x = rect.x() + margin
-            y = rect.y() + rect.height() - self.height() - margin
-        else:  # bottom-right (default)
+            x, y = rect.x() + margin, rect.y() + rect.height() - self.height() - margin
+        elif pos == "bottom-right":
             x = rect.x() + rect.width() - self.width() - margin
+            y = rect.y() + rect.height() - self.height() - margin
+        else:  # "bottom-center" (default)
+            x = rect.x() + (rect.width() - self.width()) // 2
             y = rect.y() + rect.height() - self.height() - margin
         self.move(x, y)
 
-    # ── Physics ────────────────────────────────────────────────────────────
-
-    def _spawn_spheres(self) -> list[_Sphere]:
-        cx = cy = self.ORB_RADIUS + self.PADDING
-        spheres = []
-        for i in range(self.SPHERE_COUNT):
-            angle = 2 * math.pi * i / self.SPHERE_COUNT + random.random() * 0.4
-            r = self.ORB_RADIUS * 0.55 * (0.6 + random.random() * 0.4)
-            x = cx + math.cos(angle) * r
-            y = cy + math.sin(angle) * r
-            spheres.append(
-                _Sphere(
-                    x=x,
-                    y=y,
-                    px=x,
-                    py=y,
-                    radius=8 + random.random() * 6,
-                    phase=random.random() * math.pi * 2,
-                )
-            )
-        return spheres
+    # ── Tick / state animation ─────────────────────────────────────────────
 
     def _on_tick(self) -> None:
         self._pulse_phase += 0.06
@@ -213,87 +169,13 @@ class OrbOverlay(QWidget):
                 self._level = float(self._level_provider())
             except Exception:
                 self._level = 0.0
-        # Smooth the level so spheres don't jitter on fast transients
-        self._level_smooth += (self._level - self._level_smooth) * 0.25
-        self._step_physics()
+        self._level_smooth += (self._level - self._level_smooth) * 0.3
+
+        # Fade satellites in/out smoothly when hover state changes
+        target = 1.0 if self._hovered else 0.0
+        self._satellite_opacity += (target - self._satellite_opacity) * 0.25
+
         self.update()
-
-    def _step_physics(self) -> None:
-        cx = cy = self.ORB_RADIUS + self.PADDING
-
-        # Idle target radius breathes slightly (only if pulse is enabled);
-        # audio always expands it outward regardless.
-        if self.config.orb_idle_pulse:
-            idle_breath = (
-                self.ORB_RADIUS * 0.55 + 1.4 * math.sin(self._pulse_phase)
-            )
-        else:
-            idle_breath = self.ORB_RADIUS * 0.55
-        audio_push = self._level_smooth * (self.ORB_RADIUS - 12)
-        target_r = idle_breath + audio_push
-
-        # Idle motion is much gentler than active. Boost only with audio.
-        idle_factor = 0.4 if self._state == "idle" else 1.0
-        drift_strength = 0.06 * idle_factor + self._level_smooth * 0.18
-        wobble_strength = 0.04 * idle_factor + self._level_smooth * 0.10
-
-        for s in self._spheres:
-            # Verlet integration with stronger dampening when idle so the
-            # cluster doesn't drift around the screen on its own.
-            damp = 0.88 if self._state == "idle" else 0.94
-            vx = (s.x - s.px) * damp
-            vy = (s.y - s.py) * damp
-            s.px, s.py = s.x, s.y
-
-            # Soft pull toward target ring
-            dx = s.x - cx
-            dy = s.y - cy
-            d = math.hypot(dx, dy) or 1e-6
-            ndx, ndy = dx / d, dy / d
-            tx = cx + ndx * target_r
-            ty = cy + ndy * target_r
-            ax = (tx - s.x) * 0.04
-            ay = (ty - s.y) * 0.04
-
-            # Tangential drift — idle = barely-there; active = lively
-            ax += -ndy * drift_strength
-            ay += ndx * drift_strength
-
-            # Per-sphere phase wobble for organic feel
-            ax += math.cos(self._pulse_phase * 1.3 + s.phase) * wobble_strength
-            ay += math.sin(self._pulse_phase * 1.7 + s.phase) * wobble_strength
-
-            s.x += vx + ax
-            s.y += vy + ay
-
-        # Soft inter-sphere repulsion so they don't overlap
-        for i in range(len(self._spheres)):
-            for j in range(i + 1, len(self._spheres)):
-                a = self._spheres[i]
-                b = self._spheres[j]
-                dx = b.x - a.x
-                dy = b.y - a.y
-                d2 = dx * dx + dy * dy
-                min_d = a.radius + b.radius
-                if d2 < min_d * min_d:
-                    d = math.sqrt(d2) or 1e-6
-                    overlap = (min_d - d) * 0.5
-                    nx = dx / d
-                    ny = dy / d
-                    a.x -= nx * overlap
-                    a.y -= ny * overlap
-                    b.x += nx * overlap
-                    b.y += ny * overlap
-
-        # Hard outer constraint — keep them inside the visible orb
-        max_r = self.ORB_RADIUS - 4
-        for s in self._spheres:
-            dx = s.x - cx
-            dy = s.y - cy
-            d = math.hypot(dx, dy)
-            if d > max_r:
-                s.x = cx + dx / d * max_r
-                s.y = cy + dy / d * max_r
 
     # ── Painting ───────────────────────────────────────────────────────────
 
@@ -301,21 +183,27 @@ class OrbOverlay(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        cx = cy = self.ORB_RADIUS + self.PADDING
+        cx = cy = self.DOT_RADIUS + self.PADDING
         accent, accent_deep = COLOR_THEMES.get(self._theme, COLOR_THEMES["cyan"])
         if self._state == "recording":
-            accent = RED
-            accent_deep = QColor(120, 30, 40)
+            accent, accent_deep = RED, QColor(120, 30, 40)
+        elif self._state == "done":
+            accent, accent_deep = GREEN, QColor(30, 90, 50)
 
-        # Outer halo (breathing pulse — subtle when idle, stronger on audio)
-        breath = 0.6 + 0.4 * (0.5 + 0.5 * math.sin(self._pulse_phase * 0.6))
+        # Outer halo — gentle breathing pulse when idle, stronger on audio.
+        # The halo size stays roughly constant; only alpha changes — so the
+        # orb doesn't appear to "grow and shrink" violently.
+        if self.config.orb_idle_pulse or self._state != "idle":
+            breath = 0.5 + 0.5 * math.sin(self._pulse_phase * 0.7)
+        else:
+            breath = 0.5
         halo_strength = (
-            0.55 * breath + self._level_smooth * 1.2
+            0.55 * breath + self._level_smooth * 1.4
             if self._state != "idle"
-            else 0.45 * breath
+            else 0.35 * breath
         )
-        for i in range(self.PADDING, 0, -3):
-            alpha = int(36 * halo_strength * (1 - i / self.PADDING))
+        for i in range(self.PADDING - 14, 0, -3):
+            alpha = int(34 * halo_strength * (1 - i / (self.PADDING - 14)))
             if alpha <= 0:
                 continue
             color = QColor(accent)
@@ -323,129 +211,136 @@ class OrbOverlay(QWidget):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(color)
             p.drawEllipse(
-                int(cx - self.ORB_RADIUS - i),
-                int(cy - self.ORB_RADIUS - i),
-                int((self.ORB_RADIUS + i) * 2),
-                int((self.ORB_RADIUS + i) * 2),
+                int(cx - self.DOT_RADIUS - i),
+                int(cy - self.DOT_RADIUS - i),
+                int((self.DOT_RADIUS + i) * 2),
+                int((self.DOT_RADIUS + i) * 2),
             )
 
-        # Background glass disc
-        disc_grad = QRadialGradient(cx, cy - 6, self.ORB_RADIUS)
-        disc_grad.setColorAt(0.0, QColor(28, 56, 92, 230))
-        disc_grad.setColorAt(0.7, QColor(8, 16, 30, 235))
-        disc_grad.setColorAt(1.0, QColor(2, 8, 23, 240))
-        p.setBrush(QBrush(disc_grad))
-        p.setPen(QPen(GLASS_RIM, 1.2))
-        p.drawEllipse(
-            int(cx - self.ORB_RADIUS),
-            int(cy - self.ORB_RADIUS),
-            int(self.ORB_RADIUS * 2),
-            int(self.ORB_RADIUS * 2),
-        )
-
-        # Glass spheres — back-to-front by y for fake depth
-        for s in sorted(self._spheres, key=lambda s: s.y):
-            self._draw_sphere(p, s, accent, accent_deep)
-
-        # Top rim highlight on the disc — gives the "glass" feel
-        rim_path = QPainterPath()
-        rim_path.addEllipse(
-            cx - self.ORB_RADIUS + 5,
-            cy - self.ORB_RADIUS + 5,
-            (self.ORB_RADIUS - 5) * 2,
-            (self.ORB_RADIUS - 5) * 2,
-        )
-        p.setPen(QPen(GLASS_RIM, 0.8))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(rim_path)
-
-        # Hover satellite buttons (lang / tonality / local-toggle).
-        # Always rendered when hovered; hidden otherwise. Icons + labels
-        # are drawn in tinted circles fanning out N / W / E.
-        if self._hovered:
-            self._draw_satellite_buttons(p, cx, cy, accent)
-
-    def _draw_sphere(
-        self, p: QPainter, s: _Sphere, accent: QColor, deep: QColor
-    ) -> None:
-        # Body gradient — "glass" with a bright top-left highlight
-        grad = QRadialGradient(s.x - s.radius * 0.3, s.y - s.radius * 0.4, s.radius * 1.4)
-        accent_bright = QColor(accent)
-        accent_bright = QColor(
-            min(255, accent.red() + 40),
-            min(255, accent.green() + 40),
-            min(255, accent.blue() + 40),
-            230,
-        )
-        grad.setColorAt(0.0, accent_bright)
-        grad.setColorAt(0.55, accent)
-        grad.setColorAt(1.0, deep)
+        # Main dot — glass-morph with deep gradient
+        grad = QRadialGradient(cx - 3, cy - 4, self.DOT_RADIUS * 1.4)
+        grad.setColorAt(0.0, _bright(accent, 30))
+        grad.setColorAt(0.6, accent)
+        grad.setColorAt(1.0, accent_deep)
         p.setBrush(QBrush(grad))
-        p.setPen(QPen(GLASS_RIM, 0.6))
+        p.setPen(QPen(GLASS_RIM, 1.0))
         p.drawEllipse(
-            int(s.x - s.radius), int(s.y - s.radius), int(s.radius * 2), int(s.radius * 2)
+            cx - self.DOT_RADIUS, cy - self.DOT_RADIUS,
+            self.DOT_RADIUS * 2, self.DOT_RADIUS * 2,
         )
 
-        # Specular highlight dot
-        hl = GLASS_HIGHLIGHT
-        p.setBrush(hl)
+        # Inner pulse — small concentric circle that breathes (signals "alive")
+        inner_r = max(
+            2,
+            int(
+                self.DOT_RADIUS * 0.35
+                + 2.0 * math.sin(self._pulse_phase * 1.4)
+                + self._level_smooth * (self.DOT_RADIUS * 0.5)
+            ),
+        )
+        inner_color = QColor(255, 255, 255, 180 if self._state != "idle" else 110)
+        p.setBrush(inner_color)
         p.setPen(Qt.PenStyle.NoPen)
-        hl_r = max(2, int(s.radius * 0.32))
+        p.drawEllipse(cx - inner_r, cy - inner_r, inner_r * 2, inner_r * 2)
+
+        # Specular highlight
+        p.setBrush(QColor(255, 255, 255, 90))
         p.drawEllipse(
-            int(s.x - s.radius * 0.4),
-            int(s.y - s.radius * 0.5),
-            hl_r,
-            hl_r,
+            cx - int(self.DOT_RADIUS * 0.55),
+            cy - int(self.DOT_RADIUS * 0.65),
+            max(2, int(self.DOT_RADIUS * 0.32)),
+            max(2, int(self.DOT_RADIUS * 0.32)),
         )
 
-    def _draw_satellite_buttons(
+        # Satellite dots (faded by hover-opacity so they dissolve in/out)
+        if self._satellite_opacity > 0.02:
+            self._draw_satellites(p, cx, cy, accent)
+
+    def _draw_satellites(
         self, p: QPainter, cx: int, cy: int, accent: QColor
     ) -> None:
-        r_orbit = self.ORB_RADIUS + 12
-        # Three positions: top, left, right
-        anchors = [
-            ("top", cx, cy - r_orbit, "🔒" if self.config.mode == "local" else "☁"),
-            ("left", cx - r_orbit, cy, _short_lang(self.config.language)),
-            ("right", cx + r_orbit, cy, _short_style(self.config.cleanup_style)),
-        ]
-        for _name, bx, by, label in anchors:
-            # Soft drop-shadow halo
-            for i in range(6, 0, -1):
-                alpha = int(32 * (1 - i / 6))
+        op = self._satellite_opacity
+        positions = self._satellite_positions(cx, cy)
+        for name, (sx, sy) in positions.items():
+            # Soft halo
+            for i in range(4, 0, -1):
+                alpha = int(op * 28 * (1 - i / 4))
                 color = QColor(accent)
                 color.setAlpha(alpha)
                 p.setBrush(color)
                 p.setPen(Qt.PenStyle.NoPen)
                 p.drawEllipse(
-                    bx - self.BUTTON_RADIUS - i,
-                    by - self.BUTTON_RADIUS - i,
-                    (self.BUTTON_RADIUS + i) * 2,
-                    (self.BUTTON_RADIUS + i) * 2,
+                    sx - self.SAT_RADIUS - i,
+                    sy - self.SAT_RADIUS - i,
+                    (self.SAT_RADIUS + i) * 2,
+                    (self.SAT_RADIUS + i) * 2,
                 )
-            # Button background
-            grad = QRadialGradient(bx, by - 4, self.BUTTON_RADIUS)
-            grad.setColorAt(0.0, QColor(40, 70, 110, 235))
-            grad.setColorAt(1.0, QColor(8, 16, 30, 240))
+            # Body
+            grad = QRadialGradient(sx - 2, sy - 3, self.SAT_RADIUS * 1.3)
+            bright = QColor(accent.red(), accent.green(), accent.blue(), int(255 * op))
+            dim = QColor(GLASS_DARK)
+            dim.setAlpha(int(235 * op))
+            grad.setColorAt(0.0, bright)
+            grad.setColorAt(1.0, dim)
             p.setBrush(QBrush(grad))
-            p.setPen(QPen(GLASS_RIM, 0.8))
+            rim = QColor(GLASS_RIM)
+            rim.setAlpha(int(GLASS_RIM.alpha() * op))
+            p.setPen(QPen(rim, 0.8))
             p.drawEllipse(
-                bx - self.BUTTON_RADIUS,
-                by - self.BUTTON_RADIUS,
-                self.BUTTON_RADIUS * 2,
-                self.BUTTON_RADIUS * 2,
+                sx - self.SAT_RADIUS, sy - self.SAT_RADIUS,
+                self.SAT_RADIUS * 2, self.SAT_RADIUS * 2,
             )
-            # Label / icon
-            p.setPen(WHITE)
-            p.drawText(
-                QRect(
-                    bx - self.BUTTON_RADIUS,
-                    by - self.BUTTON_RADIUS,
-                    self.BUTTON_RADIUS * 2,
-                    self.BUTTON_RADIUS * 2,
-                ),
-                int(Qt.AlignmentFlag.AlignCenter),
-                label,
-            )
+            # Tiny indicator inside
+            self._draw_satellite_indicator(p, name, sx, sy, op)
+
+    def _draw_satellite_indicator(
+        self, p: QPainter, name: str, sx: int, sy: int, op: float
+    ) -> None:
+        """A 1-glyph hint in each satellite. Kept minimal — the popup
+        on click does the heavy lifting."""
+        white = QColor(255, 255, 255, int(220 * op))
+        p.setPen(QPen(white, 1.2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        if name == "top":
+            # Lock = local. Open arc = cloud. Differentiate by current mode.
+            is_local = self.config.mode == "local"
+            if is_local:
+                # Closed lock body
+                p.drawRect(sx - 3, sy - 1, 6, 4)
+                # shackle
+                path = QPainterPath()
+                path.moveTo(sx - 2, sy - 1)
+                path.lineTo(sx - 2, sy - 3)
+                path.quadTo(sx, sy - 5, sx + 2, sy - 3)
+                path.lineTo(sx + 2, sy - 1)
+                p.drawPath(path)
+            else:
+                # Cloud — three little bumps
+                p.drawEllipse(sx - 4, sy - 1, 3, 3)
+                p.drawEllipse(sx - 1, sy - 2, 4, 4)
+                p.drawEllipse(sx + 2, sy - 1, 3, 3)
+        elif name == "left":
+            # "Aa" globe-ish — render the language code in tiny font
+            f = p.font()
+            f.setPointSize(7)
+            f.setBold(True)
+            p.setFont(f)
+            p.setPen(white)
+            r = QRect(sx - self.SAT_RADIUS, sy - self.SAT_RADIUS,
+                       self.SAT_RADIUS * 2, self.SAT_RADIUS * 2)
+            p.drawText(r, int(Qt.AlignmentFlag.AlignCenter),
+                       (self.config.language or "DE").upper()[:2])
+        elif name == "right":
+            # Sparkle — diagonal cross + tiny dot
+            p.drawLine(sx - 3, sy, sx + 3, sy)
+            p.drawLine(sx, sy - 3, sx, sy + 3)
+
+    def _satellite_positions(self, cx: int, cy: int) -> dict[str, tuple[int, int]]:
+        return {
+            "top": (cx, cy - self.SAT_DISTANCE),
+            "left": (cx - self.SAT_DISTANCE, cy),
+            "right": (cx + self.SAT_DISTANCE, cy),
+        }
 
     # ── Mouse ──────────────────────────────────────────────────────────────
 
@@ -458,30 +353,22 @@ class OrbOverlay(QWidget):
         self.update()
 
     def mousePressEvent(self, e) -> None:
-        # Right-click anywhere on the orb starts a drag-to-move. Useful for
-        # users who want to relocate the orb without diving into Settings.
+        # Right-click drag = move the orb.
         if e.button() == Qt.MouseButton.RightButton:
             self._drag_origin = e.globalPosition().toPoint() - self.pos()
             self.setCursor(Qt.CursorShape.SizeAllCursor)
             return
 
-        if not self._hovered:
+        # Only react to left-clicks on satellites when they're visible.
+        if self._satellite_opacity < 0.4:
             return
-        cx = cy = self.ORB_RADIUS + self.PADDING
-        r_orbit = self.ORB_RADIUS + 12
+        cx = cy = self.DOT_RADIUS + self.PADDING
         pos = e.position()
-        click_x, click_y = pos.x(), pos.y()
-        for name, bx, by in (
-            ("top", cx, cy - r_orbit),
-            ("left", cx - r_orbit, cy),
-            ("right", cx + r_orbit, cy),
-        ):
-            if math.hypot(click_x - bx, click_y - by) <= self.BUTTON_RADIUS:
-                self._handle_button(name)
+        cx_mouse, cy_mouse = pos.x(), pos.y()
+        for name, (sx, sy) in self._satellite_positions(cx, cy).items():
+            if math.hypot(cx_mouse - sx, cy_mouse - sy) <= self.SAT_RADIUS + 2:
+                self._handle_satellite(name, sx, sy)
                 return
-        # Click on the orb itself currently does nothing — reserved for
-        # future "click to dictate" behavior. The hotkey is the primary
-        # entry point for v0.4 to keep the scope tight.
 
     def mouseMoveEvent(self, e) -> None:
         if self._drag_origin is not None:
@@ -493,8 +380,6 @@ class OrbOverlay(QWidget):
         if self._drag_origin is not None and e.button() == Qt.MouseButton.RightButton:
             self._drag_origin = None
             self.setCursor(Qt.CursorShape.ArrowCursor)
-            # Persist the new position as "custom-X-Y" relative to the
-            # screen this orb currently lives on.
             screen = QApplication.screenAt(self.pos()) or QApplication.primaryScreen()
             geom = screen.availableGeometry()
             sx = self.x() - geom.x()
@@ -504,23 +389,80 @@ class OrbOverlay(QWidget):
             return
         super().mouseReleaseEvent(e)
 
-    def _handle_button(self, which: str) -> None:
-        if which == "top":
-            # Toggle Local / last cloud mode
-            if self.config.mode == "local":
-                target = self.config.last_cloud_mode or "subunit"
-            else:
-                target = "local"
+    # ── Sub-popups (mode / style / lang) ───────────────────────────────────
+
+    def _handle_satellite(self, name: str, sx_local: int, sy_local: int) -> None:
+        # Translate satellite anchor from widget-local to global so
+        # popups land next to the right satellite.
+        anchor_global = self.mapToGlobal(QPoint(int(sx_local), int(sy_local)))
+
+        if name == "top":
+            self._open_choice_popup(
+                anchor_global,
+                title="Mode",
+                options=[
+                    ("local", "Local"),
+                    (self.config.last_cloud_mode or "subunit", "Cloud"),
+                ],
+                current=self.config.mode if self.config.mode == "local" else "cloud",
+                on_pick=self._pick_mode,
+            )
+        elif name == "right":
+            self._open_choice_popup(
+                anchor_global,
+                title="Cleanup style",
+                options=[("tidy", "Tidy"), ("formal", "Formal")],
+                current=self.config.cleanup_style,
+                on_pick=self._pick_style,
+            )
+        elif name == "left":
+            self._open_lang_popup(anchor_global)
+
+    def _pick_mode(self, choice: str) -> None:
+        # The popup passes "local" or the cloud mode key directly.
+        if choice == "local":
+            self._on_change_mode("local")
+        else:
+            target = self.config.last_cloud_mode or "subunit"
+            if choice in CLOUD_MODES:
+                target = choice
             self._on_change_mode(target)
-        elif which == "left":
-            self._cycle_language()
-        elif which == "right":
-            self._cycle_style()
         self.update()
 
-    def _cycle_language(self) -> None:
-        """Open a searchable popup with all 99 Whisper-supported languages.
-        Position it just above the orb so it doesn't cover the satellites."""
+    def _pick_style(self, choice: str) -> None:
+        if choice not in ("tidy", "formal"):
+            return
+        self.config.cleanup_style = choice
+        self.config.save()
+        self.update()
+
+    def _open_choice_popup(
+        self,
+        anchor_global: QPoint,
+        title: str,
+        options: list[tuple[str, str]],
+        current: str,
+        on_pick: Callable[[str], None],
+    ) -> None:
+        """Tiny pill-shaped popup with N round bubbles for visual choice.
+        Kept compact so it feels like a natural extension of the orb,
+        not a full-window dialog."""
+        self._close_popup()
+        popup = ChoiceBubblePopup(title, options, current, on_pick)
+        # Place above the satellite if there's room, else below.
+        screen = QApplication.screenAt(anchor_global) or QApplication.primaryScreen()
+        geom = screen.availableGeometry()
+        px = anchor_global.x() - popup.width() // 2
+        py = anchor_global.y() - popup.height() - 12
+        if py < geom.y() + 8:
+            py = anchor_global.y() + 18
+        px = max(geom.x() + 8, min(px, geom.x() + geom.width() - popup.width() - 8))
+        popup.move(px, py)
+        popup.show()
+        self._popup = popup
+
+    def _open_lang_popup(self, anchor_global: QPoint) -> None:
+        self._close_popup()
         from .lang_picker import LangPickerPopup
 
         def on_pick(code: str) -> None:
@@ -529,34 +471,166 @@ class OrbOverlay(QWidget):
             self.update()
 
         popup = LangPickerPopup(self.config.language, on_pick)
-        # Anchor: above-left of the orb, so it appears to "pop out" of the
-        # left satellite button. Clamp inside the screen.
-        screen = QApplication.screenAt(self.pos()) or QApplication.primaryScreen()
+        screen = QApplication.screenAt(anchor_global) or QApplication.primaryScreen()
         geom = screen.availableGeometry()
-        px = self.x() - popup.width() - 8
-        py = self.y() + (self.height() - popup.height()) // 2
-        if px < geom.x() + 8:
-            px = self.x() + self.width() + 8  # flip to the right side
-        py = max(geom.y() + 8, min(py, geom.y() + geom.height() - popup.height() - 8))
+        # Anchor: above the orb, centered. Flips below if it would clip.
+        px = anchor_global.x() - popup.width() // 2
+        py = anchor_global.y() - popup.height() - 12
+        if py < geom.y() + 8:
+            py = anchor_global.y() + 18
+        px = max(geom.x() + 8, min(px, geom.x() + geom.width() - popup.width() - 8))
         popup.move(px, py)
         popup.show()
-        # Keep a strong ref so it isn't GC'd while open
-        self._lang_popup = popup
+        self._popup = popup
 
-    def _cycle_style(self) -> None:
-        styles = ["tidy", "formal"]
-        cur = self.config.cleanup_style
-        try:
-            idx = styles.index(cur)
-        except ValueError:
-            idx = -1
-        self.config.cleanup_style = styles[(idx + 1) % len(styles)]
-        self.config.save()
+    def _close_popup(self) -> None:
+        if self._popup is not None:
+            self._popup.close()
+            self._popup = None
 
 
-def _short_lang(code: str) -> str:
-    return (code or "de").upper()[:2]
+# ── Choice bubble popup ──────────────────────────────────────────────────────
 
 
-def _short_style(style: str) -> str:
-    return {"tidy": "T", "formal": "F"}.get(style, "T")
+class ChoiceBubblePopup(QWidget):
+    """Tiny horizontal pill with N round bubbles. Click one → on_pick + close.
+    Used for Mode (Local/Cloud) and Style (Tidy/Formal) so the user picks
+    visually instead of cycling through options."""
+
+    BUBBLE_R = 26
+    BUBBLE_GAP = 14
+    PADDING = 14
+
+    def __init__(
+        self,
+        title: str,
+        options: list[tuple[str, str]],
+        current: str,
+        on_pick: Callable[[str], None],
+    ) -> None:
+        super().__init__()
+        self._title = title
+        self._options = options
+        self._current = current
+        self._on_pick = on_pick
+        self._hovered_idx = -1
+        self.setMouseTracking(True)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Popup
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+        bw = (
+            self.PADDING * 2
+            + len(options) * self.BUBBLE_R * 2
+            + max(0, len(options) - 1) * self.BUBBLE_GAP
+        )
+        bh = self.PADDING * 2 + self.BUBBLE_R * 2 + 18  # extra for title row
+        self.resize(bw, bh)
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Pill background
+        path = QPainterPath()
+        path.addRoundedRect(self.rect().toRectF(), 18, 18)
+        p.fillPath(path, GLASS_DARK)
+        p.setPen(QPen(GLASS_RIM, 1.0))
+        p.drawPath(path)
+
+        # Title
+        f = p.font()
+        f.setPointSize(8)
+        f.setBold(True)
+        p.setFont(f)
+        p.setPen(QColor(255, 255, 255, 160))
+        title_rect = QRect(0, 4, self.width(), 14)
+        p.drawText(title_rect, int(Qt.AlignmentFlag.AlignCenter), self._title.upper())
+
+        # Bubbles
+        x = self.PADDING
+        y = self.height() - self.PADDING - self.BUBBLE_R * 2
+        for i, (key, label) in enumerate(self._options):
+            cx = x + self.BUBBLE_R
+            cy = y + self.BUBBLE_R
+            is_active = key == self._current
+            is_hover = i == self._hovered_idx
+
+            if is_active:
+                core = CYAN
+                deep = DEEP_CYAN
+            elif is_hover:
+                core = QColor(255, 255, 255, 50)
+                deep = QColor(8, 16, 30, 240)
+            else:
+                core = QColor(40, 60, 90, 220)
+                deep = QColor(8, 16, 30, 240)
+
+            # Halo on active
+            if is_active:
+                for r in range(6, 0, -2):
+                    halo = QColor(core)
+                    halo.setAlpha(28)
+                    p.setBrush(halo)
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.drawEllipse(
+                        cx - self.BUBBLE_R - r, cy - self.BUBBLE_R - r,
+                        (self.BUBBLE_R + r) * 2, (self.BUBBLE_R + r) * 2,
+                    )
+
+            grad = QRadialGradient(cx - 4, cy - 6, self.BUBBLE_R * 1.4)
+            grad.setColorAt(0.0, _bright(core, 30) if is_active else core)
+            grad.setColorAt(1.0, deep)
+            p.setBrush(QBrush(grad))
+            p.setPen(QPen(GLASS_RIM, 0.8))
+            p.drawEllipse(
+                cx - self.BUBBLE_R, cy - self.BUBBLE_R,
+                self.BUBBLE_R * 2, self.BUBBLE_R * 2,
+            )
+
+            # Label
+            p.setPen(NIGHT if is_active else WHITE_DIM)
+            f2 = p.font()
+            f2.setPointSize(9)
+            f2.setBold(is_active)
+            p.setFont(f2)
+            r = QRect(cx - self.BUBBLE_R, cy - self.BUBBLE_R,
+                       self.BUBBLE_R * 2, self.BUBBLE_R * 2)
+            p.drawText(r, int(Qt.AlignmentFlag.AlignCenter), label)
+
+            x += self.BUBBLE_R * 2 + self.BUBBLE_GAP
+
+    def mouseMoveEvent(self, e) -> None:
+        self._hovered_idx = self._idx_at(e.position().x(), e.position().y())
+        self.update()
+        super().mouseMoveEvent(e)
+
+    def mousePressEvent(self, e) -> None:
+        idx = self._idx_at(e.position().x(), e.position().y())
+        if idx >= 0:
+            key = self._options[idx][0]
+            self._on_pick(key)
+            self.close()
+
+    def _idx_at(self, x: float, y: float) -> int:
+        bx = self.PADDING
+        by = self.height() - self.PADDING - self.BUBBLE_R * 2
+        for i in range(len(self._options)):
+            cx = bx + self.BUBBLE_R
+            cy = by + self.BUBBLE_R
+            if math.hypot(x - cx, y - cy) <= self.BUBBLE_R:
+                return i
+            bx += self.BUBBLE_R * 2 + self.BUBBLE_GAP
+        return -1
+
+
+def _bright(c: QColor, by: int) -> QColor:
+    return QColor(
+        min(255, c.red() + by),
+        min(255, c.green() + by),
+        min(255, c.blue() + by),
+        c.alpha(),
+    )

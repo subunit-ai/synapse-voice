@@ -53,9 +53,11 @@ class Config:
     # via Settings if you want the minimal old-style notifier back.
     use_orb_overlay: bool = True
     orb_color_theme: str = "cyan"  # cyan | violet | mint
-    # Position: one of the four screen corners, or "custom-X-Y" where X/Y
-    # are screen-relative pixel offsets (set by user drag).
-    orb_position: str = "bottom-right"
+    # Position: one of the named anchors (bottom-center, bottom-left,
+    # bottom-right, top-center, top-left, top-right) or "custom-X-Y"
+    # where X/Y are screen-relative pixel offsets (set by user drag).
+    # Default = bottom-center (TJ-confirmed: "soll mittig platziert sein").
+    orb_position: str = "bottom-center"
     orb_idle_pulse: bool = True
 
     # v0.3.0: AI cleanup layer
