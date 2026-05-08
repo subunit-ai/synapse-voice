@@ -178,6 +178,79 @@ def set_clipboard(text: str) -> bool:
     return False
 
 
+def get_clipboard() -> Optional[str]:
+    """Read the current clipboard contents. Returns None if unavailable
+    (no clipboard tool, OS doesn't support, or read failed). Used by the
+    paste flow to save+restore the user's original clipboard so we don't
+    leak transcribed text to other apps after we're done."""
+    if sys.platform.startswith("linux"):
+        if _have("xclip"):
+            try:
+                p = subprocess.run(
+                    ["xclip", "-selection", "clipboard", "-o"],
+                    capture_output=True, check=False, timeout=2,
+                )
+                if p.returncode == 0:
+                    return p.stdout.decode("utf-8", errors="replace")
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+        if _have("wl-paste"):
+            try:
+                p = subprocess.run(
+                    ["wl-paste", "--no-newline"],
+                    capture_output=True, check=False, timeout=2,
+                )
+                if p.returncode == 0:
+                    return p.stdout.decode("utf-8", errors="replace")
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+        return None
+    if sys.platform == "win32":
+        return _win_get_clipboard()
+    return None
+
+
+def _win_get_clipboard() -> Optional[str]:
+    """Read CF_UNICODETEXT from the Win clipboard with proper x64 sigs."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.GetClipboardData.argtypes = [wintypes.UINT]
+    user32.GetClipboardData.restype = wintypes.HANDLE
+    user32.CloseClipboard.argtypes = []
+    user32.CloseClipboard.restype = wintypes.BOOL
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalUnlock.restype = wintypes.BOOL
+
+    CF_UNICODETEXT = 13
+    for _ in range(5):
+        if user32.OpenClipboard(0):
+            break
+        time.sleep(0.04)
+    else:
+        return None
+    try:
+        h = user32.GetClipboardData(CF_UNICODETEXT)
+        if not h:
+            return None
+        ptr = kernel32.GlobalLock(h)
+        if not ptr:
+            return None
+        try:
+            return ctypes.wstring_at(ptr)
+        finally:
+            kernel32.GlobalUnlock(h)
+    finally:
+        user32.CloseClipboard()
+
+
 def _win_set_clipboard(text: str) -> bool:
     """Native-API clipboard set with proper x64 ctypes signatures.
 

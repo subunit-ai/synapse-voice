@@ -308,7 +308,22 @@ class SynapseVoiceApp(QObject):
             # top can still interfere with our SetForegroundWindow + Ctrl+V.
             if self.config.show_bubble and self.bubble.isVisible():
                 self.bubble.hide()
+            # Codex-finding (Should): save the user's clipboard before we
+            # overwrite it, then restore after a short delay so other
+            # apps can't read the transcribed text from the system
+            # clipboard. Only restore on a successful paste — clipboard
+            # mode means the user wants to keep the text there.
+            from .target_lock import get_clipboard, set_clipboard
+
+            saved_clipboard = get_clipboard()
             _ok, mode = paste_into(self.target, text)
+            if mode == "pasted" and saved_clipboard is not None:
+                # 2.5s gives the target app time to handle Ctrl+V before
+                # we yank the text back out of the clipboard.
+                QTimer.singleShot(
+                    2500,
+                    lambda saved=saved_clipboard: set_clipboard(saved),
+                )
         else:
             from .target_lock import set_clipboard
 
@@ -522,9 +537,10 @@ class SynapseVoiceApp(QObject):
             finished_with_path = pyqtSignal(str)
             failed = pyqtSignal(str)
 
-            def __init__(self, url: str) -> None:
+            def __init__(self, url: str, expected_hash: str = "") -> None:
                 super().__init__()
                 self.url = url
+                self.expected_hash = expected_hash
                 self._cancelled = False
 
             def cancel(self) -> None:
@@ -537,13 +553,17 @@ class SynapseVoiceApp(QObject):
                             raise RuntimeError("cancelled")
                         if t:
                             self.progress_changed.emit(int(100 * d / t))
-                    target = updater.download_installer(self.url, progress_cb=cb)
+                    target = updater.download_installer(
+                        self.url,
+                        progress_cb=cb,
+                        expected_sha256=self.expected_hash or None,
+                    )
                     self.finished_with_path.emit(str(target))
                 except Exception as e:
                     if not self._cancelled:
                         self.failed.emit(str(e))
 
-        worker = _Worker(info.installer_url)
+        worker = _Worker(info.installer_url, info.installer_sha256 or "")
         # Keep ref so it isn't GC'd mid-flight.
         self._update_worker = worker
 

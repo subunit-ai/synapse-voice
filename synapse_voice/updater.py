@@ -3,9 +3,12 @@
 Network call is best-effort and timeouts quickly so app startup isn't
 delayed if GitHub is slow. v0.3.4: result drives an in-app download +
 installer launch instead of just opening the release page in a browser.
+v0.3.14: SHA-256 verification, redirect host validation, private temp
+directory, clipboard restore — all per Codex audit findings.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -37,6 +40,11 @@ class UpdateInfo:
     # back to opening the release page.
     installer_url: Optional[str] = None
     installer_name: Optional[str] = None
+    # v0.3.14: SHA-256 hash of the installer. Parsed out of the release
+    # body (CI workflow appends a `## SHA256` section). None for older
+    # releases that pre-date the workflow change — those updates skip
+    # hash verification with a warning.
+    installer_sha256: Optional[str] = None
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
@@ -78,6 +86,7 @@ def check(timeout: float = 5.0) -> Optional[UpdateInfo]:
     if available:
         _log.info("Update available: %s → %s", __version__, tag)
     installer_url, installer_name = _pick_installer_asset(assets)
+    installer_sha256 = _extract_installer_hash(body, installer_name)
     return UpdateInfo(
         current=__version__,
         latest=tag,
@@ -86,7 +95,30 @@ def check(timeout: float = 5.0) -> Optional[UpdateInfo]:
         available=available,
         installer_url=installer_url,
         installer_name=installer_name,
+        installer_sha256=installer_sha256,
     )
+
+
+def _extract_installer_hash(body: str, installer_name: Optional[str]) -> Optional[str]:
+    """Pull the SHA-256 of the installer out of the release body. CI
+    appends a `## SHA256` section like:
+
+        ## SHA256
+        - SynapseVoice-Setup-0.3.14.exe: `abcd1234...`
+        - SynapseVoice-x86_64.AppImage: `9876fedc...`
+
+    Returns the lowercase hex hash for `installer_name`, or None if the
+    body has no hash section yet (older releases pre-CI-update)."""
+    if not body or not installer_name:
+        return None
+    pattern = re.compile(
+        r"`?" + re.escape(installer_name) + r"`?\s*[:|]\s*`?([a-fA-F0-9]{64})`?",
+        re.MULTILINE,
+    )
+    m = pattern.search(body)
+    if m:
+        return m.group(1).lower()
+    return None
 
 
 def _pick_installer_asset(assets: list) -> tuple[Optional[str], Optional[str]]:
@@ -137,21 +169,49 @@ def download_installer(
     target_dir: Optional[Path] = None,
     progress_cb: Optional[Callable[[int, int], None]] = None,
     timeout: float = 30.0,
+    expected_sha256: Optional[str] = None,
 ) -> Path:
-    """Stream-download the installer to disk. Calls progress_cb(bytes, total)
-    on every chunk if total size is known. Returns the saved path."""
+    """Stream-download the installer to disk. Verifies the host of every
+    redirect-hop, writes to a private 0700 temp directory, computes the
+    SHA-256 while streaming, and rejects the file if it doesn't match
+    `expected_sha256` (when provided).
+
+    Calls progress_cb(bytes, total) on every chunk if total size is
+    known. Returns the saved path on success.
+    """
     if not _is_allowed_download_url(url):
         raise ValueError(
             f"Refusing to download from non-GitHub host: {url!r}. "
             "Update aborted as a safety check."
         )
-    if target_dir is None:
-        target_dir = Path(tempfile.gettempdir())
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / (Path(url).name or "synapse-voice-update.bin")
+    # Codex-finding (Should): the original URL allowlist didn't validate
+    # the redirect chain. Resolve redirects manually so every hop is
+    # checked against the same allowlist before we follow it.
+    resolved_url, hop_count = _resolve_redirects(url, max_hops=5, timeout=timeout)
+    if not _is_allowed_download_url(resolved_url):
+        raise ValueError(
+            f"Refusing to follow redirect to non-GitHub host: {resolved_url!r}. "
+            "Update aborted as a safety check."
+        )
+    if hop_count:
+        _log.info("Update URL resolved through %d redirect(s) → %s", hop_count, resolved_url)
 
-    _log.info("Downloading update from %s → %s", url, target)
-    with requests.get(url, stream=True, timeout=timeout) as r:
+    # Codex-finding (Should): write to a private 0700 temp dir we just
+    # created, not the world-readable shared tmp where another local
+    # process could symlink-race the path before we ShellExecute it.
+    if target_dir is None:
+        target_dir = Path(tempfile.mkdtemp(prefix="synapse-voice-update-"))
+    else:
+        target_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(target_dir, 0o700)
+    except OSError:
+        pass  # filesystem doesn't support modes (Win FAT etc.) — tolerable
+    target = target_dir / (Path(resolved_url).name or "synapse-voice-update.bin")
+
+    _log.info("Downloading update from %s → %s", resolved_url, target)
+    hasher = hashlib.sha256()
+    with requests.get(resolved_url, stream=True, timeout=timeout, allow_redirects=False) as r:
         r.raise_for_status()
         total = int(r.headers.get("content-length") or 0)
         downloaded = 0
@@ -160,13 +220,65 @@ def download_installer(
                 if not chunk:
                     continue
                 f.write(chunk)
+                hasher.update(chunk)
                 downloaded += len(chunk)
                 if progress_cb and total:
                     try:
                         progress_cb(downloaded, total)
                     except Exception:
                         pass  # progress UI errors mustn't kill the download
+    actual = hasher.hexdigest()
+    _log.info("Update SHA-256: %s", actual)
+
+    # Codex-finding (Must): verify hash before we hand the file to
+    # ShellExecute as admin. If the release didn't ship a hash (older
+    # release pre-CI-update), log a warning but continue — those still
+    # benefit from the host allowlist + UAC prompt.
+    if expected_sha256:
+        if actual.lower() != expected_sha256.lower():
+            try:
+                target.unlink()
+            except OSError:
+                pass
+            raise ValueError(
+                f"Installer hash mismatch — expected {expected_sha256}, "
+                f"got {actual}. File deleted, update aborted."
+            )
+        _log.info("Update hash verified ✓")
+    else:
+        _log.warning(
+            "No expected SHA-256 supplied — proceeding without hash verification. "
+            "Older release without hash in body."
+        )
     return target
+
+
+def _resolve_redirects(url: str, max_hops: int = 5, timeout: float = 30.0) -> tuple[str, int]:
+    """Walk the redirect chain HEAD-by-HEAD, validating each Location
+    header against the allowlist. Returns (final_url, hop_count) on
+    success, raises ValueError if any hop points outside the allowlist."""
+    current = url
+    for hop in range(max_hops):
+        try:
+            r = requests.head(current, allow_redirects=False, timeout=timeout)
+        except requests.RequestException:
+            # HEAD failed — the GET will fail too with a clearer error.
+            return current, hop
+        if r.status_code in (301, 302, 303, 307, 308):
+            loc = r.headers.get("Location")
+            if not loc:
+                return current, hop
+            # Resolve relative redirects against the current URL
+            from urllib.parse import urljoin
+
+            current = urljoin(current, loc)
+            if not _is_allowed_download_url(current):
+                raise ValueError(
+                    f"Redirect chain leads outside the GitHub allowlist: {current!r}"
+                )
+        else:
+            return current, hop
+    return current, max_hops
 
 
 def launch_installer_and_quit(installer: Path) -> None:

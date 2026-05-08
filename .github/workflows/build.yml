@@ -171,10 +171,38 @@ jobs:
       - name: List artefacts
         run: ls -la artefacts/**/*
 
+      - name: Compute SHA-256 hashes
+        id: hashes
+        run: |
+          # The auto-updater (synapse_voice/updater.py) parses these out of
+          # the release body to verify the installer before launching it as
+          # admin. Format: "- <filename>: `<hex>`" — must match the regex
+          # in _extract_installer_hash.
+          {
+            echo "hashes<<EOF"
+            echo "## SHA256"
+            for f in \
+              artefacts/linux-x86_64/synapse-voice-linux-x86_64.tar.gz \
+              artefacts/linux-x86_64/SynapseVoice-x86_64.AppImage \
+              artefacts/windows-x86_64/synapse-voice-windows-x86_64.zip \
+              artefacts/windows-x86_64/SynapseVoice-Setup-*.exe; do
+              if [ -f "$f" ]; then
+                hash=$(sha256sum "$f" | awk '{print $1}')
+                name=$(basename "$f")
+                echo "- ${name}: \`${hash}\`"
+              fi
+            done
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+          echo "Computed hashes:"
+          grep -A 100 '^hashes<<' $GITHUB_OUTPUT | head -20
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          append_body: true
+          body: ${{ steps.hashes.outputs.hashes }}
           files: |
             artefacts/linux-x86_64/synapse-voice-linux-x86_64.tar.gz
             artefacts/linux-x86_64/SynapseVoice-x86_64.AppImage
