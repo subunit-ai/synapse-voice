@@ -260,6 +260,15 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self.row_show_bubble)
 
+        self.row_orb_overlay = _ToggleRow(
+            "Use Orb overlay (v0.4 preview)",
+            "Persistent floating glass-spheres widget with hover-picker for "
+            "language / cleanup-style / local-toggle. Replaces the bubble. "
+            "Requires app restart to take effect.",
+            self.config.use_orb_overlay,
+        )
+        layout.addWidget(self.row_orb_overlay)
+
         self.row_autostart = _ToggleRow(
             "Start automatically with system",
             "Adds a registry entry on Windows / .desktop file on Linux.",
@@ -673,6 +682,7 @@ class SettingsDialog(QDialog):
         config.autopaste = self.row_autopaste.is_on()
         config.target_lock = self.row_target_lock.is_on()
         config.show_bubble = self.row_show_bubble.is_on()
+        config.use_orb_overlay = self.row_orb_overlay.is_on()
         config.recording_mode = self.recording_mode_combo.currentData() or "toggle"
         config.cleanup_enabled = self.row_cleanup.is_on()
         config.cleanup_style = self.cleanup_style_combo.currentData() or "tidy"

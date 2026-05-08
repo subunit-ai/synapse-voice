@@ -50,6 +50,7 @@ a = Analysis(
         "synapse_voice.ui",
         "synapse_voice.ui.tray",
         "synapse_voice.ui.bubble",
+        "synapse_voice.ui.orb_overlay",
         "synapse_voice.ui.settings",
         "synapse_voice.ui.history",
         "synapse_voice.ui.hotkey_capture",

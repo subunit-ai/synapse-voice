@@ -5,6 +5,7 @@ import signal
 import sys
 import traceback
 from datetime import datetime, timezone
+from typing import Optional
 
 from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -17,6 +18,7 @@ from .recorder import Recorder
 from .target_lock import WindowTarget, capture_active_window, paste_into
 from .transcriber import TranscriberError, get_transcriber
 from .ui.bubble import Bubble
+from .ui.orb_overlay import OrbOverlay
 from .ui.history import HistoryDialog
 from .ui.main_window import MainWindow
 from .ui.settings import SettingsDialog
@@ -103,6 +105,14 @@ class SynapseVoiceApp(QObject):
 
         self.bubble = Bubble()
         self.bubble.set_level_provider(lambda: self.recorder.level)
+        # v0.4: Orb is the new persistent overlay. Created always but only
+        # shown when the user opts in via Settings — keeps the door open
+        # for in-session toggling without a restart.
+        self.orb: Optional[OrbOverlay] = None
+        if self.config.use_orb_overlay:
+            self.orb = OrbOverlay(self.config, on_change_mode=self.change_mode)
+            self.orb.set_level_provider(lambda: self.recorder.level)
+            self.orb.show()
         self.main_window = MainWindow(
             config=self.config,
             on_change_mode=self.change_mode,
@@ -208,6 +218,8 @@ class SynapseVoiceApp(QObject):
         self._safe_status("recording", color="#ff585c")
         if self.config.show_bubble:
             self.bubble.show_state("recording", f"● Rec → {title[:32]}")
+        if self.orb is not None:
+            self.orb.show_state("recording")
 
     def _stop_recording(self) -> None:
         audio = self.recorder.stop()
@@ -215,12 +227,16 @@ class SynapseVoiceApp(QObject):
             self.tray.set_state("idle", "idle")
             self._safe_status("idle")
             self.bubble.show_state("error", "no audio captured", auto_hide_ms=2500)
+            if self.orb is not None:
+                self.orb.show_state("error")
             return
         self._last_audio_seconds = float(audio.size) / float(self.recorder.sample_rate)
         self.tray.set_state("transcribing", f"transcribing ({self.config.mode})")
         self._safe_status("transcribing", color="#40d6ff")
         if self.config.show_bubble:
             self.bubble.show_state("transcribing", f"… transcribing ({self.config.mode})")
+        if self.orb is not None:
+            self.orb.show_state("transcribing")
         self._run_transcribe(audio)
 
     def _run_transcribe(self, audio) -> None:
@@ -274,12 +290,18 @@ class SynapseVoiceApp(QObject):
         if mode == "pasted":
             self.bubble.show_state("done", f"✓ pasted → {title[:32]}", auto_hide_ms=2800)
             self.tray.set_state("done", f"pasted → {title[:32]}")
+            if self.orb is not None:
+                self.orb.show_state("done")
         elif mode == "clipboard":
             self.bubble.show_state("done", "✓ copied to clipboard", auto_hide_ms=2800)
             self.tray.set_state("done", "copied to clipboard")
+            if self.orb is not None:
+                self.orb.show_state("done")
         else:
             self.bubble.show_state("error", "paste failed", auto_hide_ms=2800)
             self.tray.set_state("error", "paste failed")
+            if self.orb is not None:
+                self.orb.show_state("error")
         QTimer.singleShot(2500, lambda: (self.tray.set_state("idle", "idle"), self._safe_status("idle")))
 
     def _on_transcribe_failed(self, message: str) -> None:

@@ -43,6 +43,14 @@ class Config:
     target_lock: bool = True
     show_bubble: bool = True
 
+    # v0.4: Orb overlay (Voicely-style floating glass spheres). Replaces
+    # the simple Bubble notifier when enabled. Off by default until the
+    # design has settled — opt-in via Settings.
+    use_orb_overlay: bool = False
+    orb_color_theme: str = "cyan"  # cyan | violet | mint
+    orb_position: str = "bottom-right"  # bottom-right | bottom-left | top-right | top-left
+    orb_idle_pulse: bool = True
+
     # v0.3.0: AI cleanup layer
     cleanup_enabled: bool = False
     cleanup_style: str = "tidy"  # tidy | formal
