@@ -204,6 +204,7 @@ class SettingsDialog(QDialog):
 
         self.tabs.addTab(self._build_general_tab(), "General")
         self.tabs.addTab(self._build_transcription_tab(), "Transcription")
+        self.tabs.addTab(self._build_overlay_tab(), "Overlay")
         self.tabs.addTab(self._build_account_tab(), "Account")
         self.tabs.addTab(self._build_about_tab(), "About")
 
@@ -527,7 +528,73 @@ class SettingsDialog(QDialog):
             mode = self.mode_combo.currentData() or "subunit"
             self.provider_stack.setCurrentIndex(self._panel_index.get(mode, 1))
 
-    # ── Tab 3: Account ─────────────────────────────────────────────────────
+    # ── Tab 3: Overlay ─────────────────────────────────────────────────────
+
+    def _build_overlay_tab(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("tabPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(2, 18, 2, 18)
+        layout.setSpacing(14)
+
+        layout.addWidget(_section_title("Visual feedback"))
+        # Re-use the toggle from General — referenced again here so this tab
+        # is self-contained for users who jump straight to it.
+        self.row_orb_overlay_v2 = _ToggleRow(
+            "Use Orb overlay",
+            "Persistent floating glass-spheres widget. Hover for satellite "
+            "buttons (language / cleanup-style / local-toggle). "
+            "Right-click and drag to move it.",
+            self.config.use_orb_overlay,
+        )
+        layout.addWidget(self.row_orb_overlay_v2)
+
+        layout.addSpacing(6)
+        layout.addWidget(_section_title("Color theme"))
+        self.orb_theme_combo = QComboBox()
+        self.orb_theme_combo.addItem("Cyan (default)", "cyan")
+        self.orb_theme_combo.addItem("Violet", "violet")
+        self.orb_theme_combo.addItem("Mint", "mint")
+        idx = self.orb_theme_combo.findData(self.config.orb_color_theme)
+        if idx >= 0:
+            self.orb_theme_combo.setCurrentIndex(idx)
+        layout.addWidget(self.orb_theme_combo)
+
+        layout.addSpacing(6)
+        layout.addWidget(_section_title("Position"))
+        self.orb_position_combo = QComboBox()
+        self.orb_position_combo.addItem("Bottom-right", "bottom-right")
+        self.orb_position_combo.addItem("Bottom-left", "bottom-left")
+        self.orb_position_combo.addItem("Top-right", "top-right")
+        self.orb_position_combo.addItem("Top-left", "top-left")
+        # If user has dragged the orb to a custom spot, show "Custom" and
+        # don't overwrite it unless they pick a corner.
+        cur_pos = self.config.orb_position or "bottom-right"
+        if cur_pos.startswith("custom-"):
+            self.orb_position_combo.addItem(f"Custom ({cur_pos[7:]})", cur_pos)
+        idx = self.orb_position_combo.findData(cur_pos)
+        if idx >= 0:
+            self.orb_position_combo.setCurrentIndex(idx)
+        layout.addWidget(self.orb_position_combo)
+        layout.addWidget(_hint(
+            "Tip: right-click + drag the orb to place it anywhere on screen — "
+            "the position is saved automatically."
+        ))
+
+        layout.addSpacing(6)
+        layout.addWidget(_section_title("Idle behaviour"))
+        self.row_orb_pulse = _ToggleRow(
+            "Subtle breathing pulse when idle",
+            "Slow halo pulse signals the app is alive. Disable for a "
+            "completely still orb when not recording.",
+            self.config.orb_idle_pulse,
+        )
+        layout.addWidget(self.row_orb_pulse)
+
+        layout.addStretch(1)
+        return page
+
+    # ── Tab 4: Account ─────────────────────────────────────────────────────
 
     def _build_account_tab(self) -> QWidget:
         page = QWidget()
@@ -682,7 +749,17 @@ class SettingsDialog(QDialog):
         config.autopaste = self.row_autopaste.is_on()
         config.target_lock = self.row_target_lock.is_on()
         config.show_bubble = self.row_show_bubble.is_on()
-        config.use_orb_overlay = self.row_orb_overlay.is_on()
+        # The Orb toggle is mirrored on both General + Overlay tabs.
+        # The Overlay tab is the "more complete" surface, so let it win
+        # if the user touched it; otherwise fall back to the General tab.
+        config.use_orb_overlay = (
+            self.row_orb_overlay_v2.is_on()
+            if hasattr(self, "row_orb_overlay_v2")
+            else self.row_orb_overlay.is_on()
+        )
+        config.orb_color_theme = self.orb_theme_combo.currentData() or "cyan"
+        config.orb_position = self.orb_position_combo.currentData() or "bottom-right"
+        config.orb_idle_pulse = self.row_orb_pulse.is_on()
         config.recording_mode = self.recording_mode_combo.currentData() or "toggle"
         config.cleanup_enabled = self.row_cleanup.is_on()
         config.cleanup_style = self.cleanup_style_combo.currentData() or "tidy"

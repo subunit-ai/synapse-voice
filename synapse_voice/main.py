@@ -216,7 +216,8 @@ class SynapseVoiceApp(QObject):
         title = self.target.title if self.target else "no target"
         self.tray.set_state("recording", f"recording → {title}")
         self._safe_status("recording", color="#ff585c")
-        if self.config.show_bubble:
+        # Bubble + Orb are mutually exclusive — orb wins when enabled.
+        if self.config.show_bubble and self.orb is None:
             self.bubble.show_state("recording", f"● Rec → {title[:32]}")
         if self.orb is not None:
             self.orb.show_state("recording")
@@ -226,14 +227,15 @@ class SynapseVoiceApp(QObject):
         if audio.size == 0:
             self.tray.set_state("idle", "idle")
             self._safe_status("idle")
-            self.bubble.show_state("error", "no audio captured", auto_hide_ms=2500)
-            if self.orb is not None:
+            if self.orb is None:
+                self.bubble.show_state("error", "no audio captured", auto_hide_ms=2500)
+            else:
                 self.orb.show_state("error")
             return
         self._last_audio_seconds = float(audio.size) / float(self.recorder.sample_rate)
         self.tray.set_state("transcribing", f"transcribing ({self.config.mode})")
         self._safe_status("transcribing", color="#40d6ff")
-        if self.config.show_bubble:
+        if self.config.show_bubble and self.orb is None:
             self.bubble.show_state("transcribing", f"… transcribing ({self.config.mode})")
         if self.orb is not None:
             self.orb.show_state("transcribing")
@@ -269,7 +271,10 @@ class SynapseVoiceApp(QObject):
         text = (text or "").strip()
         if not text:
             self.tray.set_state("idle", "idle (empty)")
-            self.bubble.show_state("error", "empty transcription", auto_hide_ms=2500)
+            if self.orb is None:
+                self.bubble.show_state("error", "empty transcription", auto_hide_ms=2500)
+            else:
+                self.orb.show_state("error")
             return
         if self.config.autopaste:
             # Hide the bubble BEFORE paste so it doesn't steal focus from the
@@ -288,20 +293,23 @@ class SynapseVoiceApp(QObject):
         self._record_history(text, mode)
         title = self.target.title if self.target else ""
         if mode == "pasted":
-            self.bubble.show_state("done", f"✓ pasted → {title[:32]}", auto_hide_ms=2800)
+            if self.orb is None:
+                self.bubble.show_state("done", f"✓ pasted → {title[:32]}", auto_hide_ms=2800)
+            else:
+                self.orb.show_state("done")
             self.tray.set_state("done", f"pasted → {title[:32]}")
-            if self.orb is not None:
-                self.orb.show_state("done")
         elif mode == "clipboard":
-            self.bubble.show_state("done", "✓ copied to clipboard", auto_hide_ms=2800)
-            self.tray.set_state("done", "copied to clipboard")
-            if self.orb is not None:
+            if self.orb is None:
+                self.bubble.show_state("done", "✓ copied to clipboard", auto_hide_ms=2800)
+            else:
                 self.orb.show_state("done")
+            self.tray.set_state("done", "copied to clipboard")
         else:
-            self.bubble.show_state("error", "paste failed", auto_hide_ms=2800)
-            self.tray.set_state("error", "paste failed")
-            if self.orb is not None:
+            if self.orb is None:
+                self.bubble.show_state("error", "paste failed", auto_hide_ms=2800)
+            else:
                 self.orb.show_state("error")
+            self.tray.set_state("error", "paste failed")
         QTimer.singleShot(2500, lambda: (self.tray.set_state("idle", "idle"), self._safe_status("idle")))
 
     def _on_transcribe_failed(self, message: str) -> None:

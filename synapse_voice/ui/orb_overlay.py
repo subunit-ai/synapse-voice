@@ -98,7 +98,8 @@ class OrbOverlay(QWidget):
         self._level = 0.0
         self._level_smooth = 0.0
         self._hovered = False
-        self._theme = "cyan"
+        self._theme = config.orb_color_theme or "cyan"
+        self._drag_origin: Optional[QPoint] = None
         self.setMouseTracking(True)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -149,10 +150,38 @@ class OrbOverlay(QWidget):
     # ── Geometry / placement ───────────────────────────────────────────────
 
     def _reposition(self) -> None:
+        """Place the orb according to config.orb_position. Supported values:
+        "bottom-right" / "bottom-left" / "top-right" / "top-left" or
+        "custom-X-Y" where X and Y are screen-relative pixel offsets set
+        via drag-to-move.
+        """
         screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         rect = screen.availableGeometry()
-        x = rect.x() + rect.width() - self.width() - 24
-        y = rect.y() + rect.height() - self.height() - 24
+        margin = 24
+        pos = (self.config.orb_position or "bottom-right").strip()
+
+        if pos.startswith("custom-"):
+            try:
+                _, sx, sy = pos.split("-", 2)
+                x = rect.x() + max(0, min(rect.width() - self.width(), int(sx)))
+                y = rect.y() + max(0, min(rect.height() - self.height(), int(sy)))
+                self.move(x, y)
+                return
+            except (ValueError, IndexError):
+                pass  # fall through to default corner
+
+        if pos == "top-left":
+            x = rect.x() + margin
+            y = rect.y() + margin
+        elif pos == "top-right":
+            x = rect.x() + rect.width() - self.width() - margin
+            y = rect.y() + margin
+        elif pos == "bottom-left":
+            x = rect.x() + margin
+            y = rect.y() + rect.height() - self.height() - margin
+        else:  # bottom-right (default)
+            x = rect.x() + rect.width() - self.width() - margin
+            y = rect.y() + rect.height() - self.height() - margin
         self.move(x, y)
 
     # ── Physics ────────────────────────────────────────────────────────────
@@ -419,6 +448,13 @@ class OrbOverlay(QWidget):
         self.update()
 
     def mousePressEvent(self, e) -> None:
+        # Right-click anywhere on the orb starts a drag-to-move. Useful for
+        # users who want to relocate the orb without diving into Settings.
+        if e.button() == Qt.MouseButton.RightButton:
+            self._drag_origin = e.globalPosition().toPoint() - self.pos()
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+            return
+
         if not self._hovered:
             return
         cx = cy = self.ORB_RADIUS + self.PADDING
@@ -436,6 +472,27 @@ class OrbOverlay(QWidget):
         # Click on the orb itself currently does nothing — reserved for
         # future "click to dictate" behavior. The hotkey is the primary
         # entry point for v0.4 to keep the scope tight.
+
+    def mouseMoveEvent(self, e) -> None:
+        if self._drag_origin is not None:
+            self.move(e.globalPosition().toPoint() - self._drag_origin)
+            return
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e) -> None:
+        if self._drag_origin is not None and e.button() == Qt.MouseButton.RightButton:
+            self._drag_origin = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            # Persist the new position as "custom-X-Y" relative to the
+            # screen this orb currently lives on.
+            screen = QApplication.screenAt(self.pos()) or QApplication.primaryScreen()
+            geom = screen.availableGeometry()
+            sx = self.x() - geom.x()
+            sy = self.y() - geom.y()
+            self.config.orb_position = f"custom-{sx}-{sy}"
+            self.config.save()
+            return
+        super().mouseReleaseEvent(e)
 
     def _handle_button(self, which: str) -> None:
         if which == "top":
