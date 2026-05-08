@@ -310,6 +310,12 @@ class MainWindow(QMainWindow):
         title_box.addWidget(version)
         header.addLayout(title_box)
         header.addStretch()
+        # v0.3.22: plan badge (Trial · 5d left | Pro | Local only). Hidden
+        # by default until main.py refreshes /v1/account/info on startup.
+        from .plan_badge import PlanBadge
+        self.plan_badge = PlanBadge()
+        self.plan_badge.hide()
+        header.addWidget(self.plan_badge, 0, Qt.AlignmentFlag.AlignTop)
         # Status is now reflected only in the bubble + tray icon. The redundant
         # "● idle" pill in the header looked like a notification badge and TJ
         # wanted it gone.

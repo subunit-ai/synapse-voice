@@ -199,6 +199,11 @@ class SynapseVoiceApp(QObject):
         if self.config.auto_update_check:
             QTimer.singleShot(8_000, self._check_for_updates)
 
+        # v0.3.22: pull plan + trial state from the server at boot — that's
+        # the source of truth, the local config is just a cache. Delayed
+        # so the UI is up first and a slow network doesn't block startup.
+        QTimer.singleShot(2_000, self._refresh_account_info)
+
         # v0.4: Show the 4-step onboarding wizard on first launch. We delay
         # by 600ms so the tray icon + main window are settled by the time
         # the modal pops up — looks less janky than firing during ctor.
@@ -375,9 +380,18 @@ class SynapseVoiceApp(QObject):
         QTimer.singleShot(2500, lambda: (self.tray.set_state("idle", "idle"), self._safe_status("idle")))
 
     def _on_transcribe_failed(self, message: str) -> None:
+        lower = message.lower()
+        # v0.3.22: trial expired surfaces as a paywall instead of an error
+        # toast. The transcriber raises TrialExpiredError → the worker
+        # forwards it via .failed.emit(str(e)); we recognise it by content.
+        if "trial" in lower and ("expired" in lower or "ended" in lower) or "402" in lower:
+            self.tray.set_state("idle", "idle")
+            self._safe_status("idle")
+            self.bubble.fade_out()
+            self._show_paywall()
+            return
         # Auth / credentials problems are user-fixable in Settings — surface a
         # dialog instead of just a tray flash that the user can't act on.
-        lower = message.lower()
         is_auth = any(
             kw in lower
             for kw in ("api key", "401", "invalid api", "unauthor", "forbidden", "403")
@@ -392,6 +406,67 @@ class SynapseVoiceApp(QObject):
             )
             return
         self._show_error(message)
+
+    def _show_paywall(self) -> None:
+        from .ui.plan_badge import PaywallDialog
+        from . import account as _acc
+
+        url = _acc.upgrade_url(
+            self.config.subunit_endpoint, self.config.subunit_api_key
+        )
+        dlg = PaywallDialog(url, parent=self.main_window)
+        dlg.exec()
+        if dlg.result_action() == "local":
+            # Switch the desktop app back to free local mode in-place
+            self.change_mode("local")
+            self.tray.showMessage(
+                "Synapse Voice",
+                "Switched to Local mode. Cloud disabled until you upgrade.",
+                msecs=3500,
+            )
+
+    def _refresh_account_info(self) -> None:
+        """Pull latest plan + trial state from the server in the background.
+        Non-blocking, no error toast — if the server is down we just keep
+        the local cache."""
+        if not self.config.subunit_api_key:
+            self.main_window.plan_badge.hide()
+            return
+        from . import account as _acc
+        from .ui.plan_badge import update_badge_from_info
+
+        class _W(QObject):
+            done = pyqtSignal(object)
+
+            def __init__(self, ep, key):
+                super().__init__()
+                self.ep, self.key = ep, key
+
+            def run(self):
+                info = _acc.info(self.ep, self.key)
+                self.done.emit(info)
+
+        thread = QThread(self)
+        worker = _W(self.config.subunit_endpoint, self.config.subunit_api_key)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+
+        def apply(info):
+            update_badge_from_info(self.main_window.plan_badge, info)
+            if info is not None:
+                # Mirror server truth back into local config so the badge
+                # is correct on the next launch even before we refetch.
+                self.config.plan = info.plan
+                if info.trial_started_at:
+                    self.config.trial_started_at = info.trial_started_at
+                self.config.save()
+
+        worker.done.connect(apply)
+        worker.done.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._account_refresh = (thread, worker)
+        thread.start()
 
     def _show_error(self, message: str) -> None:
         _log.error("UI error surfaced: %s", message)

@@ -18,6 +18,9 @@ from pathlib import Path
 DB_PATH = Path(os.environ.get("ACCOUNTS_DB", "/data/accounts.db"))
 
 
+TRIAL_DAYS = 7  # 7-day Pro trial on signup — see v0.3.22 release notes
+
+
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _conn() as c:
@@ -32,6 +35,14 @@ def init_db() -> None:
             )
             """
         )
+        # v0.3.22: add subscription columns. SQLite doesn't have IF NOT
+        # EXISTS for ALTER, so we discover existing columns and add the
+        # missing ones — keeps old DBs working.
+        cols = {row["name"] for row in c.execute("PRAGMA table_info(accounts)").fetchall()}
+        if "trial_started_at" not in cols:
+            c.execute("ALTER TABLE accounts ADD COLUMN trial_started_at INTEGER NOT NULL DEFAULT 0")
+        if "subscription_active_until" not in cols:
+            c.execute("ALTER TABLE accounts ADD COLUMN subscription_active_until INTEGER NOT NULL DEFAULT 0")
         c.execute(
             """
             CREATE TABLE IF NOT EXISTS usage_events (
@@ -74,13 +85,15 @@ def create_account(email: str) -> dict:
     the email is already on file (the caller must direct the user to a
     proper recovery flow rather than echoing the existing key).
 
-    Returns {email, api_key, plan, created_at} on success.
+    New accounts start a TRIAL_DAYS Pro trial automatically. Returns
+    {email, api_key, plan, created_at, trial_started_at, trial_expires_at}.
     """
     email = email.strip().lower()
     if not email or "@" not in email:
         raise ValueError("invalid email")
 
     now = int(time.time())
+    trial_started_at = now
     with _conn() as c:
         row = c.execute(
             "SELECT 1 FROM accounts WHERE email = ?", (email,)
@@ -90,16 +103,19 @@ def create_account(email: str) -> dict:
         api_key = _new_api_key()
         c.execute(
             """
-            INSERT INTO accounts (email, api_key, plan, created_at)
-            VALUES (?, ?, 'free', ?)
+            INSERT INTO accounts
+                (email, api_key, plan, created_at, trial_started_at)
+            VALUES (?, ?, 'trial', ?, ?)
             """,
-            (email, api_key, now),
+            (email, api_key, now, trial_started_at),
         )
         return {
             "email": email,
             "api_key": api_key,
-            "plan": "free",
+            "plan": "trial",
             "created_at": now,
+            "trial_started_at": trial_started_at,
+            "trial_expires_at": trial_started_at + TRIAL_DAYS * 86400,
         }
 
 
@@ -119,7 +135,11 @@ def lookup_by_key(api_key: str) -> dict | None:
         return None
     with _conn() as c:
         row = c.execute(
-            "SELECT email, api_key, plan, created_at FROM accounts WHERE api_key = ?",
+            """
+            SELECT email, api_key, plan, created_at,
+                   trial_started_at, subscription_active_until
+            FROM accounts WHERE api_key = ?
+            """,
             (api_key,),
         ).fetchone()
         if not row:
@@ -129,7 +149,50 @@ def lookup_by_key(api_key: str) -> dict | None:
             "api_key": row["api_key"],
             "plan": row["plan"],
             "created_at": row["created_at"],
+            "trial_started_at": row["trial_started_at"] or 0,
+            "subscription_active_until": row["subscription_active_until"] or 0,
         }
+
+
+def trial_expires_at(account: dict) -> int:
+    """Compute trial expiry timestamp from `trial_started_at`. Returns 0
+    if the account never started a trial (legacy / `plan='free'` accounts
+    pre-v0.3.22)."""
+    started = account.get("trial_started_at") or 0
+    if not started:
+        return 0
+    return started + TRIAL_DAYS * 86400
+
+
+def has_active_access(account: dict) -> bool:
+    """True iff the account is allowed to call gated endpoints right now.
+
+    Pro = paid + within their subscription window.
+    Trial = trial started + within TRIAL_DAYS.
+    Free = no.
+    """
+    now = int(time.time())
+    plan = (account.get("plan") or "free").lower()
+    if plan == "pro":
+        return (account.get("subscription_active_until") or 0) > now
+    if plan == "trial":
+        exp = trial_expires_at(account)
+        return exp > now
+    return False
+
+
+def set_pro(api_key: str, valid_until_unix: int) -> None:
+    """Mark an account as Pro until the given timestamp. Used by the
+    /upgrade webhook (Stripe will eventually post here)."""
+    with _conn() as c:
+        c.execute(
+            """
+            UPDATE accounts
+            SET plan='pro', subscription_active_until=?
+            WHERE api_key=?
+            """,
+            (int(valid_until_unix), api_key),
+        )
 
 
 def record_usage(api_key: str, kind: str, duration_s: float = 0.0) -> None:

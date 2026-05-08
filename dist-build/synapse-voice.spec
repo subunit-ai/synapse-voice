@@ -62,6 +62,7 @@ a = Analysis(
         "synapse_voice.transcriber.cloud",
         "synapse_voice.transcriber.subunit",
         "synapse_voice.ui",
+        "synapse_voice.ui.plan_badge",
         "synapse_voice.ui.tray",
         "synapse_voice.ui.bubble",
         "synapse_voice.ui.orb_overlay",

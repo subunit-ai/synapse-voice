@@ -101,6 +101,25 @@ def _resolve_caller(api_key_header: str | None) -> dict | None:
     raise HTTPException(status_code=401, detail="invalid api key")
 
 
+def _require_active_access(caller: dict | None) -> None:
+    """For gated endpoints (/transcribe, /cleanup): check trial / Pro
+    state. Operator key + auth-disabled both pass through."""
+    if caller is None:
+        return  # operator-level
+    if not _accounts.has_active_access(caller):
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "trial_expired",
+                "message": (
+                    "Your free trial has ended. Upgrade to Pro to keep "
+                    "using cloud transcription."
+                ),
+                "plan": caller.get("plan", "free"),
+            },
+        )
+
+
 @app.get("/")
 async def root():
     return {
@@ -128,6 +147,7 @@ async def transcribe(
     x_api_key: str | None = Header(default=None),
 ):
     caller = _resolve_caller(x_api_key)
+    _require_active_access(caller)
 
     payload = await file.read()
     if len(payload) > MAX_AUDIO_MB * 1024 * 1024:
@@ -196,6 +216,7 @@ async def cleanup_endpoint(
     x_api_key: str | None = Header(default=None),
 ):
     caller = _resolve_caller(x_api_key)
+    _require_active_access(caller)
 
     if not req.text.strip():
         return JSONResponse({"text": req.text, "style": req.style})
@@ -258,7 +279,15 @@ async def account_info(x_api_key: str | None = Header(default=None)):
     caller = _resolve_caller(x_api_key)
     if caller is None:
         # Operator key or auth-disabled — no per-user info
-        return JSONResponse({"email": None, "plan": "operator", "calls": 0, "audio_seconds": 0.0})
+        return JSONResponse({
+            "email": None,
+            "plan": "operator",
+            "calls": 0,
+            "audio_seconds": 0.0,
+            "trial_expires_at": 0,
+            "subscription_active_until": 0,
+            "has_access": True,
+        })
     summary = _accounts.usage_summary(caller["api_key"])
     return JSONResponse(
         {
@@ -266,8 +295,34 @@ async def account_info(x_api_key: str | None = Header(default=None)):
             "plan": caller["plan"],
             "calls": summary["calls"],
             "audio_seconds": summary["audio_seconds"],
+            "trial_started_at": caller.get("trial_started_at", 0),
+            "trial_expires_at": _accounts.trial_expires_at(caller),
+            "subscription_active_until": caller.get("subscription_active_until", 0),
+            "has_access": _accounts.has_active_access(caller),
         }
     )
+
+
+# Where to send a user when their trial expires. The actual checkout URL
+# (Stripe / Lemon-Squeezy) is wired up later — for now we point at the
+# pricing page which describes the plans, so the desktop app's paywall
+# button has a real destination. Override via UPGRADE_URL env.
+UPGRADE_URL = os.environ.get(
+    "UPGRADE_URL", "https://transcribe.subunit.ai/pricing"
+)
+
+
+@app.get("/v1/account/upgrade-url")
+async def account_upgrade_url(x_api_key: str | None = Header(default=None)):
+    """Return the URL the desktop app should open in a browser when the
+    user clicks Upgrade. Includes the email as a query param so a future
+    Stripe Checkout integration can prefill it."""
+    caller = _resolve_caller(x_api_key)
+    suffix = ""
+    if caller and caller.get("email"):
+        from urllib.parse import urlencode
+        suffix = "?" + urlencode({"email": caller["email"]})
+    return JSONResponse({"url": UPGRADE_URL + suffix})
 
 
 def _decode_audio(payload: bytes, filename: str) -> np.ndarray:

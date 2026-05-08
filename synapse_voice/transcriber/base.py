@@ -10,6 +10,12 @@ class TranscriberError(RuntimeError):
     pass
 
 
+class TrialExpiredError(TranscriberError):
+    """Raised when the cloud server returns 402 (trial / subscription
+    expired). The UI catches this specifically to show the paywall
+    rather than a generic error."""
+
+
 class Transcriber(Protocol):
     def transcribe(self, audio: np.ndarray, language: str = "de") -> str: ...
 

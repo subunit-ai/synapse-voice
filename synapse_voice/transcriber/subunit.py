@@ -7,7 +7,7 @@ import wave
 import numpy as np
 import requests
 
-from .base import TranscriberError
+from .base import TranscriberError, TrialExpiredError
 
 SAMPLE_RATE = 16000
 
@@ -45,7 +45,16 @@ class SubunitTranscriber:
             r = requests.post(
                 self.endpoint, headers=headers, files=files, data=data, timeout=60
             )
+            if r.status_code == 402:
+                # Trial expired or no Pro subscription. Bubble a typed
+                # error so the UI can show the paywall instead of a
+                # generic "transcription failed" toast.
+                raise TrialExpiredError(
+                    "Free trial ended — please upgrade to keep using the Subunit cloud."
+                )
             r.raise_for_status()
+        except TrialExpiredError:
+            raise
         except requests.HTTPError as e:
             raise TranscriberError(f"Subunit HTTP {r.status_code}: {r.text[:200]}") from e
         except requests.RequestException as e:
