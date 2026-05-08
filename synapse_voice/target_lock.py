@@ -327,35 +327,188 @@ def paste_into(target: WindowTarget | None, text: str) -> tuple[bool, str]:
     if target is None:
         _log_paste("no target → clipboard only")
         return True, "clipboard"
-    focused = focus_window(target)
-    _log_paste(f"focus_window({target.title[:40]!r}) → {focused}")
-    if not focused:
-        return True, "clipboard"
 
-    # On Win we run a chain of strategies in priority order. The first that
-    # succeeds wins. SendInput Ctrl+V works for most modern apps including
-    # Electron/Chrome. WM_PASTE works for native EDIT/RICHEDIT. keybd_event
-    # is the legacy fallback some old apps still respect.
+    # Win path: attach + focus + paste in ONE AttachThreadInput context.
+    # The previous version detached before pasting, which silently broke
+    # SendInput (returns sent=0) and made GetFocus return NULL — so
+    # WM_PASTE always fell back to the wrong (top-level) HWND.
     if target.platform == "win32":
-        for strategy_name, strategy in (
-            ("SendInput", paste_keystroke),
-            ("WM_PASTE", lambda: _win_post_paste(int(target.window_id))),
-            ("keybd_event", _win_keybd_paste),
-        ):
-            try:
-                ok = bool(strategy())
-            except Exception as e:
-                _log_paste(f"strategy {strategy_name} threw: {e}")
-                ok = False
-            _log_paste(f"strategy {strategy_name} → {ok}")
-            if ok:
-                return True, "pasted"
-        return True, "clipboard"
+        return _win_paste_attached(int(target.window_id), target.title or "")
 
-    # Linux: just keystroke
+    # Linux: xdotool already activated the window, single shot keystroke.
+    if not focus_window(target):
+        return True, "clipboard"
     if not paste_keystroke():
         return True, "clipboard"
     return True, "pasted"
+
+
+def _win_paste_attached(hwnd: int, title: str) -> tuple[bool, str]:
+    """Win-safe paste: attach input queues, focus, paste, detach — atomic.
+
+    Why it has to be one block: Windows' input-queue isolation drops
+    SendInput from a non-attached caller (sent=0) and GetFocus only
+    returns the focused HWND for the calling thread. Keeping the
+    AttachThreadInput open across the paste means SendInput injects
+    into the target's queue and GetFocus returns the real focused
+    descendant (e.g. Win11 Notepad's RichEditD2DPT, which is what
+    actually accepts WM_PASTE — the top-level Notepad HWND ignores it).
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+
+    SW_RESTORE = 9
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, SW_RESTORE)
+
+    try:
+        user32.AllowSetForegroundWindow.argtypes = [wintypes.DWORD]
+        user32.AllowSetForegroundWindow(0xFFFFFFFF)  # ASFW_ANY
+    except Exception:
+        pass
+
+    # Alt-tap lifts the foreground-lock for ~5s.
+    VK_MENU = 0x12
+    KEYEVENTF_KEYUP = 0x0002
+    user32.keybd_event(VK_MENU, 0, 0, 0)
+    user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+
+    fg = user32.GetForegroundWindow()
+    fg_thread = user32.GetWindowThreadProcessId(fg, None) if fg else 0
+    my_thread = kernel32.GetCurrentThreadId()
+    target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+
+    attached_fg = False
+    attached_target = False
+    if fg_thread and fg_thread != my_thread:
+        attached_fg = bool(user32.AttachThreadInput(my_thread, fg_thread, True))
+    if target_thread and target_thread != my_thread and target_thread != fg_thread:
+        attached_target = bool(
+            user32.AttachThreadInput(my_thread, target_thread, True)
+        )
+
+    pasted = False
+    try:
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+        user32.SetActiveWindow(hwnd)
+        user32.SetFocus(hwnd)
+        time.sleep(0.2)
+
+        # Under attachment, GetFocus returns the actual focused descendant.
+        user32.GetFocus.restype = wintypes.HWND
+        focused = user32.GetFocus()
+        focused_class = _win_class_name(focused) if focused else "<none>"
+        _log_paste(
+            f"attached: target={hwnd} ({title[:40]!r}) "
+            f"focused={focused} class={focused_class}"
+        )
+
+        # Strategy 1: SendInput Ctrl+V — reliable for Electron / Chrome /
+        # Office under attachment. Won't fire keystrokes when sent==0.
+        if _win_paste_keystroke():
+            _log_paste("strategy SendInput → True")
+            pasted = True
+
+        # Strategy 2: SendMessageTimeout(WM_PASTE) on the focused descendant.
+        if not pasted and focused and _win_send_paste(focused):
+            _log_paste(f"strategy WM_PASTE focused={focused} → True")
+            pasted = True
+
+        # Strategy 3: Walk descendants for any Edit-like control and try
+        # WM_PASTE on each. Catches apps where the focused HWND isn't the
+        # actual paste-receiver (e.g. some custom containers).
+        if not pasted:
+            for child, cls in _enum_edit_children(hwnd):
+                if _win_send_paste(child):
+                    _log_paste(f"strategy WM_PASTE child={child} class={cls} → True")
+                    pasted = True
+                    break
+
+        # Strategy 4: legacy keybd_event — last resort. Some old native
+        # apps respect it even when SendInput is silently filtered.
+        if not pasted and _win_keybd_paste():
+            _log_paste("strategy keybd_event → True")
+            pasted = True
+    finally:
+        if attached_fg:
+            user32.AttachThreadInput(my_thread, fg_thread, False)
+        if attached_target:
+            user32.AttachThreadInput(my_thread, target_thread, False)
+
+    if pasted:
+        return True, "pasted"
+    _log_paste("all strategies failed → clipboard only")
+    return True, "clipboard"
+
+
+def _win_class_name(hwnd: int) -> str:
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetClassNameW.restype = ctypes.c_int
+    buf = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(hwnd, buf, 256)
+    return buf.value
+
+
+def _enum_edit_children(hwnd: int) -> list[tuple[int, str]]:
+    """Walk every descendant HWND, return (handle, class) for any control
+    whose class looks like a text input. Covers Edit / RichEdit family +
+    Win11 Notepad's RichEditD2DPT + Scintilla (used by VSCode etc.)."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+
+    EDIT_HINTS = ("Edit", "RichEdit", "RICHEDIT", "Scintilla", "RichEditD2DPT")
+    found: list[tuple[int, str]] = []
+
+    EnumChildProc = ctypes.WINFUNCTYPE(
+        wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
+    )
+
+    def _cb(child: int, _lparam: int) -> bool:
+        cls = _win_class_name(child)
+        if any(hint in cls for hint in EDIT_HINTS):
+            found.append((child, cls))
+        return True  # keep enumerating
+
+    user32.EnumChildWindows(hwnd, EnumChildProc(_cb), 0)
+    return found
+
+
+def _win_send_paste(hwnd: int) -> bool:
+    """SendMessageTimeout(WM_PASTE) — blocks until the receiver processes
+    the message (or 300ms timeout). Unlike PostMessage, gives a real
+    "did the window accept this" indicator instead of "did we queue it"."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    user32.SendMessageTimeoutW.argtypes = [
+        wintypes.HWND,
+        wintypes.UINT,
+        wintypes.WPARAM,
+        wintypes.LPARAM,
+        wintypes.UINT,
+        wintypes.UINT,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    user32.SendMessageTimeoutW.restype = ctypes.c_void_p
+
+    WM_PASTE = 0x0302
+    SMTO_ABORTIFHUNG = 0x0002
+    result = wintypes.DWORD(0)
+    rc = user32.SendMessageTimeoutW(
+        hwnd, WM_PASTE, 0, 0, SMTO_ABORTIFHUNG, 300, ctypes.byref(result)
+    )
+    return rc != 0  # nonzero = receiver processed the message
 
 
 def _log_paste(msg: str) -> None:
