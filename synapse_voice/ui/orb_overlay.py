@@ -509,16 +509,29 @@ class OrbOverlay(QWidget):
         self.update()
 
     def _cycle_language(self) -> None:
-        # Compact MVP: rotate through a short list. Full searchable picker
-        # is a v0.5 follow-up so we don't block the v0.4 ship on it.
-        langs = ["de", "en", "fr", "es", "it"]
-        cur = self.config.language
-        try:
-            idx = langs.index(cur)
-        except ValueError:
-            idx = -1
-        self.config.language = langs[(idx + 1) % len(langs)]
-        self.config.save()
+        """Open a searchable popup with all 99 Whisper-supported languages.
+        Position it just above the orb so it doesn't cover the satellites."""
+        from .lang_picker import LangPickerPopup
+
+        def on_pick(code: str) -> None:
+            self.config.language = code
+            self.config.save()
+            self.update()
+
+        popup = LangPickerPopup(self.config.language, on_pick)
+        # Anchor: above-left of the orb, so it appears to "pop out" of the
+        # left satellite button. Clamp inside the screen.
+        screen = QApplication.screenAt(self.pos()) or QApplication.primaryScreen()
+        geom = screen.availableGeometry()
+        px = self.x() - popup.width() - 8
+        py = self.y() + (self.height() - popup.height()) // 2
+        if px < geom.x() + 8:
+            px = self.x() + self.width() + 8  # flip to the right side
+        py = max(geom.y() + 8, min(py, geom.y() + geom.height() - popup.height() - 8))
+        popup.move(px, py)
+        popup.show()
+        # Keep a strong ref so it isn't GC'd while open
+        self._lang_popup = popup
 
     def _cycle_style(self) -> None:
         styles = ["tidy", "formal"]
