@@ -52,6 +52,7 @@ a = Analysis(
         "synapse_voice.ui.bubble",
         "synapse_voice.ui.orb_overlay",
         "synapse_voice.ui.lang_picker",
+        "synapse_voice.ui.mic_meter",
         "synapse_voice.languages",
         "synapse_voice.ui.settings",
         "synapse_voice.ui.history",

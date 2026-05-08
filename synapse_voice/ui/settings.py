@@ -284,19 +284,35 @@ class SettingsDialog(QDialog):
         layout.addSpacing(6)
         layout.addWidget(_section_title("Microphone"))
         from ..recorder import list_input_devices
+        from .mic_meter import MicLevelMeter
 
         self.mic_combo = QComboBox()
         self.mic_combo.addItem("System default", "")
+        # Map device-name → index so the live meter can switch quickly.
+        self._mic_name_to_index: dict[str, int] = {}
         for d in list_input_devices():
             self.mic_combo.addItem(d["name"], d["name"])
+            self._mic_name_to_index[d["name"]] = d["index"]
         idx = self.mic_combo.findData(self.config.mic_device_name or "")
         if idx >= 0:
             self.mic_combo.setCurrentIndex(idx)
         layout.addWidget(self.mic_combo)
+
+        self.mic_meter = MicLevelMeter()
+        layout.addWidget(self.mic_meter)
+
+        def _on_mic_pick(_i: int) -> None:
+            name = self.mic_combo.currentData() or ""
+            self.mic_meter.set_device(self._mic_name_to_index.get(name))
+
+        self.mic_combo.currentIndexChanged.connect(_on_mic_pick)
+        # Initial sync
+        _on_mic_pick(0)
+
         layout.addWidget(_hint(
-            "Pick the input device used for recording. Restart the app "
-            "after changing — the active stream is bound to the device "
-            "at startup."
+            "Pick the input device used for recording. The bar shows the "
+            "live signal so you can verify the right mic is selected. "
+            "Restart the app for the new device to apply to the hotkey."
         ))
 
         layout.addSpacing(6)

@@ -145,19 +145,46 @@ def launch_installer_and_quit(installer: Path) -> None:
     """Spawn the installer detached so it survives our exit, then signal
     the caller to quit. The NSIS installer auto-kills any running
     synapse-voice.exe and re-launches it after install. AppImage path
-    just chmod+x and exec."""
+    just chmod+x and exec.
+
+    Win specifics: our NSIS installer is built with RequestExecutionLevel
+    admin, so it has to be launched through ShellExecuteW with verb="runas"
+    to trigger the UAC prompt. Plain subprocess.Popen fails with WinError
+    740 ("ERROR_ELEVATION_REQUIRED") — that's exactly the symptom TJ hit
+    on his first auto-update attempt.
+    """
     if sys.platform == "win32":
-        # CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS so installer survives
-        # us quitting. NSIS handles taskkill + replace + finish-page-run.
-        DETACHED_PROCESS = 0x00000008
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-        flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-        _log.info("Launching installer: %s", installer)
-        subprocess.Popen(
-            [str(installer)],
-            close_fds=True,
-            creationflags=flags,
+        import ctypes
+
+        SW_SHOWNORMAL = 1
+        _log.info("Launching installer (UAC): %s", installer)
+        # ShellExecuteW returns an HINSTANCE; >32 means success. Lower
+        # values are error codes (5 = access denied, 31 = no app
+        # associated, etc).
+        rc = ctypes.windll.shell32.ShellExecuteW(
+            None,
+            "runas",
+            str(installer),
+            None,
+            None,
+            SW_SHOWNORMAL,
         )
+        if rc <= 32:
+            # Fall back to a non-elevated run — works for users who tweaked
+            # the installer to not require admin, or for the rare case
+            # where ShellExecute itself fails (cancelled UAC returns
+            # SE_ERR_ACCESSDENIED == 5 — that one we surface as failure).
+            if rc == 5:
+                raise RuntimeError(
+                    "User cancelled the elevation prompt — update aborted."
+                )
+            DETACHED_PROCESS = 0x00000008
+            CREATE_NEW_PROCESS_GROUP = 0x00000200
+            subprocess.Popen(
+                [str(installer)],
+                close_fds=True,
+                creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+            )
         return
     # Linux: AppImage replace-and-restart. Caller is responsible for
     # putting the new file into place — we just chmod + spawn.
