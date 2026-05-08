@@ -39,6 +39,16 @@ class Config:
             valid = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
             return cls(**valid)
         except (json.JSONDecodeError, TypeError):
+            # Corrupted config — back it up so the user can recover the history,
+            # then start fresh. Don't silently overwrite.
+            try:
+                from datetime import datetime
+
+                ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+                backup = CONFIG_DIR / f"config.broken-{ts}.json"
+                CONFIG_FILE.rename(backup)
+            except Exception:
+                pass
             return cls()
 
     def save(self) -> None:

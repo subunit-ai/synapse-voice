@@ -51,6 +51,15 @@ VIAddVersionKey "LegalCopyright" "(c) ${APP_PUBLISHER}"
 
 Section "Synapse Voice" SecCore
   SectionIn RO
+
+  ; Kill any running instance before overwriting binaries (the .exe is locked
+  ; by Windows while it's running → "Fehler beim Überschreiben der Datei").
+  ; /F = force, /T = also kill children, errors silently ignored if not found.
+  DetailPrint "Stopping any running ${APP_NAME} instance..."
+  nsExec::Exec 'taskkill /F /IM "${APP_EXEC}" /T'
+  Sleep 800
+
+  SetOverwrite try
   SetOutPath "$INSTDIR"
   ; Copy entire PyInstaller output tree
   File /r "..\dist\synapse-voice\*.*"

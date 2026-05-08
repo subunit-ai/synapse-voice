@@ -91,6 +91,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    version=str(ROOT / "dist-build" / "version-info.txt"),
 )
 
 coll = COLLECT(
