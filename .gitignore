@@ -36,6 +36,10 @@ htmlcov/
 # Local config (user-specific)
 config.local.json
 
+# Runtime secrets (server API key etc.)
+.env
+server/.env
+
 # Whisper model caches
 models/
 *.bin

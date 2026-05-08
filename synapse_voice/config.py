@@ -24,6 +24,9 @@ class Config:
     show_bubble: bool = True
     history_size: int = 50
     history: list[dict] = field(default_factory=list)
+    # Stats
+    total_transcriptions: int = 0
+    total_audio_seconds: float = 0.0
 
     @classmethod
     def load(cls) -> "Config":

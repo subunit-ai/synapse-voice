@@ -28,3 +28,4 @@ services:
 networks:
   subunit-network:
     external: true
+    name: subunit-engine_subunit-network

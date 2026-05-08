@@ -118,11 +118,40 @@ jobs:
           Compress-Archive -Path dist\synapse-voice\* -DestinationPath dist\synapse-voice-windows-x86_64.zip
         shell: pwsh
 
+      - name: Install NSIS
+        run: |
+          choco install nsis -y --no-progress
+        shell: pwsh
+
+      - name: Resolve installer version
+        id: ver
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -match '^v\d+\.\d+\.\d+') {
+            $version = $tag.TrimStart('v')
+          } else {
+            $version = "0.0.0-$($env:GITHUB_SHA.Substring(0,7))"
+          }
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          echo "Resolved version: $version"
+        shell: pwsh
+
+      - name: Build NSIS installer
+        run: |
+          $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          if (-not (Test-Path $nsis)) { $nsis = "makensis.exe" }
+          & $nsis "/DAPP_VERSION=${{ steps.ver.outputs.version }}" dist-build\installer.nsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem dist\SynapseVoice-Setup-*.exe
+        shell: pwsh
+
       - name: Upload Windows artefacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-x86_64
-          path: dist\synapse-voice-windows-x86_64.zip
+          path: |
+            dist\synapse-voice-windows-x86_64.zip
+            dist\SynapseVoice-Setup-*.exe
           if-no-files-found: error
 
   release:
@@ -146,3 +175,4 @@ jobs:
             artefacts/linux-x86_64/synapse-voice-linux-x86_64.tar.gz
             artefacts/linux-x86_64/SynapseVoice-x86_64.AppImage
             artefacts/windows-x86_64/synapse-voice-windows-x86_64.zip
+            artefacts/windows-x86_64/SynapseVoice-Setup-*.exe

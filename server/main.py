@@ -44,7 +44,11 @@ def _load_model():
             import torch
 
             if torch.cuda.is_available():
-                device, compute_type = "cuda", "float16"
+                device = "cuda"
+                # FP16 only on Volta+ (compute capability 7.0+).
+                # Pascal (GTX 10xx) lacks efficient FP16 → use int8.
+                major, _ = torch.cuda.get_device_capability(0)
+                compute_type = "float16" if major >= 7 else "int8"
             else:
                 device, compute_type = "cpu", "int8"
         except ImportError:

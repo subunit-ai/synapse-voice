@@ -34,6 +34,7 @@ a = Analysis(
     datas=extra_datas,
     hiddenimports=[
         "synapse_voice",
+        "synapse_voice.autostart",
         "synapse_voice.transcriber",
         "synapse_voice.transcriber.local",
         "synapse_voice.transcriber.openrouter",
@@ -44,6 +45,7 @@ a = Analysis(
         "synapse_voice.ui.settings",
         "synapse_voice.ui.history",
         "synapse_voice.ui.hotkey_capture",
+        "synapse_voice.ui.main_window",
         # faster-whisper deps that PyInstaller's static analysis sometimes misses
         "faster_whisper",
         "ctranslate2",

@@ -17,6 +17,7 @@ from .target_lock import WindowTarget, capture_active_window, paste_into
 from .transcriber import TranscriberError, get_transcriber
 from .ui.bubble import Bubble
 from .ui.history import HistoryDialog
+from .ui.main_window import MainWindow
 from .ui.settings import SettingsDialog
 from .ui.tray import Tray
 
@@ -73,13 +74,22 @@ class SynapseVoiceApp(QObject):
         self.target: WindowTarget | None = None
         self._thread: QThread | None = None
         self._worker: TranscribeWorker | None = None
+        self._last_audio_seconds: float = 0.0
 
         self.bubble = Bubble()
         self.bubble.set_level_provider(lambda: self.recorder.level)
+        self.main_window = MainWindow(
+            config=self.config,
+            on_change_mode=self.change_mode,
+            on_open_settings=self.open_settings,
+            on_open_history=self.open_history,
+            on_quit=self.quit,
+        )
         self.tray = Tray(
             on_toggle_record=self.toggle_record,
             on_open_settings=self.open_settings,
             on_open_history=self.open_history,
+            on_open_window=self.open_window,
             on_change_mode=self.change_mode,
             on_quit=self.quit,
             current_mode=self.config.mode,
@@ -122,6 +132,7 @@ class SynapseVoiceApp(QObject):
             return
         title = self.target.title if self.target else "no target"
         self.tray.set_state("recording", f"recording → {title}")
+        self.main_window.set_status("recording", color="#ff585c")
         if self.config.show_bubble:
             self.bubble.show_state("recording", f"● Rec → {title[:32]}")
 
@@ -129,9 +140,12 @@ class SynapseVoiceApp(QObject):
         audio = self.recorder.stop()
         if audio.size == 0:
             self.tray.set_state("idle", "idle")
-            self.bubble.show_state("error", "no audio captured", auto_hide_ms=1500)
+            self.main_window.set_status("idle")
+            self.bubble.show_state("error", "no audio captured", auto_hide_ms=2500)
             return
+        self._last_audio_seconds = float(audio.size) / float(self.recorder.sample_rate)
         self.tray.set_state("transcribing", f"transcribing ({self.config.mode})")
+        self.main_window.set_status("transcribing", color="#40d6ff")
         if self.config.show_bubble:
             self.bubble.show_state("transcribing", f"… transcribing ({self.config.mode})")
         self._run_transcribe(audio)
@@ -160,7 +174,7 @@ class SynapseVoiceApp(QObject):
         text = (text or "").strip()
         if not text:
             self.tray.set_state("idle", "idle (empty)")
-            self.bubble.show_state("error", "empty transcription", auto_hide_ms=1500)
+            self.bubble.show_state("error", "empty transcription", auto_hide_ms=2500)
             return
         ok, mode = (False, "none")
         if self.config.autopaste:
@@ -174,24 +188,25 @@ class SynapseVoiceApp(QObject):
         self._record_history(text, mode)
         title = self.target.title if self.target else ""
         if mode == "pasted":
-            self.bubble.show_state("done", f"✓ pasted → {title[:32]}", auto_hide_ms=1800)
+            self.bubble.show_state("done", f"✓ pasted → {title[:32]}", auto_hide_ms=2800)
             self.tray.set_state("done", f"pasted → {title[:32]}")
         elif mode == "clipboard":
-            self.bubble.show_state("done", "✓ copied to clipboard", auto_hide_ms=1800)
+            self.bubble.show_state("done", "✓ copied to clipboard", auto_hide_ms=2800)
             self.tray.set_state("done", "copied to clipboard")
         else:
-            self.bubble.show_state("error", "paste failed", auto_hide_ms=1800)
+            self.bubble.show_state("error", "paste failed", auto_hide_ms=2800)
             self.tray.set_state("error", "paste failed")
-        QTimer.singleShot(2500, lambda: self.tray.set_state("idle", "idle"))
+        QTimer.singleShot(2500, lambda: (self.tray.set_state("idle", "idle"), self.main_window.set_status("idle")))
 
     def _on_transcribe_failed(self, message: str) -> None:
         self._show_error(message)
 
     def _show_error(self, message: str) -> None:
         self.tray.set_state("error", "error")
-        self.bubble.show_state("error", f"⚠ {message[:60]}", auto_hide_ms=4000)
+        self.main_window.set_status("error", color="#ffc450")
+        self.bubble.show_state("error", f"⚠ {message[:60]}", auto_hide_ms=5000)
         self.tray.showMessage("Synapse Voice — error", message, msecs=4000)
-        QTimer.singleShot(3000, lambda: self.tray.set_state("idle", "idle"))
+        QTimer.singleShot(3000, lambda: (self.tray.set_state("idle", "idle"), self.main_window.set_status("idle")))
 
     def _record_history(self, text: str, mode: str) -> None:
         entry = {
@@ -203,7 +218,14 @@ class SynapseVoiceApp(QObject):
         }
         self.config.history.append(entry)
         self.config.history = self.config.history[-self.config.history_size :]
+        self.config.total_transcriptions += 1
+        if self._last_audio_seconds:
+            self.config.total_audio_seconds += self._last_audio_seconds
         self.config.save()
+        try:
+            self.main_window.refresh()
+        except Exception:
+            pass
 
     def open_settings(self) -> None:
         dlg = SettingsDialog(self.config)
@@ -218,6 +240,12 @@ class SynapseVoiceApp(QObject):
                 f"Updated. Hotkey: {self.config.hotkey} · Mode: {self.config.mode}",
                 msecs=2500,
             )
+
+    def open_window(self) -> None:
+        self.main_window.show()
+        self.main_window.raise_()
+        self.main_window.activateWindow()
+        self.main_window.refresh()
 
     def open_history(self) -> None:
         def repaste(text: str) -> None:

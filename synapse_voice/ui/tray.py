@@ -32,6 +32,7 @@ class Tray(QSystemTrayIcon):
         on_toggle_record: Callable[[], None],
         on_open_settings: Callable[[], None],
         on_open_history: Callable[[], None],
+        on_open_window: Callable[[], None],
         on_change_mode: Callable[[str], None],
         on_quit: Callable[[], None],
         current_mode: str,
@@ -49,6 +50,14 @@ class Tray(QSystemTrayIcon):
 
         # Hold menu as instance attribute — without it, Windows can GC the menu after __init__.
         self._menu = QMenu()
+
+        self._open_window_action = QAction("Open Synapse Voice", self._menu)
+        self._open_window_action.triggered.connect(lambda: on_open_window())
+        font = self._open_window_action.font()
+        font.setBold(True)
+        self._open_window_action.setFont(font)
+        self._menu.addAction(self._open_window_action)
+
         self._record_action = QAction("Toggle Record", self._menu)
         self._record_action.triggered.connect(lambda: on_toggle_record())
         self._menu.addAction(self._record_action)
@@ -91,9 +100,12 @@ class Tray(QSystemTrayIcon):
         self.activated.connect(self._on_activated)
 
     def _on_activated(self, reason: "QSystemTrayIcon.ActivationReason") -> None:
+        # Double-click goes straight into the main window — feels like a real app.
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self._open_window_action.trigger()
+            return
         if reason in (
             QSystemTrayIcon.ActivationReason.Trigger,
-            QSystemTrayIcon.ActivationReason.DoubleClick,
             QSystemTrayIcon.ActivationReason.MiddleClick,
         ):
             self._menu.popup(self.geometry().center())

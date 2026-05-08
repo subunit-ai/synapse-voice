@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
+from .. import autostart
 from ..config import Config
 from .hotkey_capture import HotkeyCaptureButton
 
@@ -97,6 +98,10 @@ class SettingsDialog(QDialog):
         self.show_bubble_cb.setChecked(config.show_bubble)
         form.addRow("", self.show_bubble_cb)
 
+        self.autostart_cb = QCheckBox("Start automatically with system")
+        self.autostart_cb.setChecked(autostart.is_enabled())
+        form.addRow("", self.autostart_cb)
+
         wrap = QVBoxLayout(self)
         wrap.addLayout(form)
         buttons = QDialogButtonBox(
@@ -121,3 +126,8 @@ class SettingsDialog(QDialog):
         config.target_lock = self.target_lock_cb.isChecked()
         config.show_bubble = self.show_bubble_cb.isChecked()
         config.save()
+
+        if self.autostart_cb.isChecked():
+            autostart.enable()
+        else:
+            autostart.disable()

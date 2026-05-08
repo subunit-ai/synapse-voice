@@ -6,12 +6,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# faster-whisper >= 1.2 ships with ctranslate2 >= 4.5 which requires CUDA 12 libs.
+# The pytorch base image only has CUDA 11.8, so we install the CUDA 12 cublas+cudnn
+# wheels and prepend them to LD_LIBRARY_PATH.
 RUN pip install --no-cache-dir \
     "fastapi>=0.115" \
     "uvicorn[standard]>=0.32" \
     "faster-whisper>=1.2" \
     "python-multipart>=0.0.9" \
-    "numpy>=1.26"
+    "numpy>=1.26" \
+    "nvidia-cublas-cu12" \
+    "nvidia-cudnn-cu12==9.*"
+
+ENV LD_LIBRARY_PATH=/opt/conda/lib/python3.10/site-packages/nvidia/cublas/lib:/opt/conda/lib/python3.10/site-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH}
 
 # Pre-download model on build so first request is fast
 ARG WHISPER_MODEL=large-v3-turbo
