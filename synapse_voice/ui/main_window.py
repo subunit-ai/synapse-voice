@@ -25,6 +25,8 @@ from PyQt6.QtWidgets import (
 
 from .. import __version__
 from ..config import Config
+from ..transcriber import ALL_MODES, mode_label
+from .widgets import BrandLogo
 
 CYAN = "#40d6ff"
 NIGHT = "#020817"
@@ -132,12 +134,17 @@ class MainWindow(QMainWindow):
 
         # ── Header ─────────────────────────────────────────────────────────
         header = QHBoxLayout()
+        header.setSpacing(14)
+        header.addWidget(BrandLogo(size=44))
+        title_box = QVBoxLayout()
+        title_box.setSpacing(2)
         title = QLabel("Synapse Voice")
         title.setObjectName("h1")
         version = QLabel(f"v{__version__}")
         version.setObjectName("dim")
-        header.addWidget(title)
-        header.addWidget(version)
+        title_box.addWidget(title)
+        title_box.addWidget(version)
+        header.addLayout(title_box)
         header.addStretch()
         self.status_lbl = QLabel("● idle")
         self.status_lbl.setObjectName("statusBig")
@@ -176,9 +183,11 @@ class MainWindow(QMainWindow):
         row.setSpacing(10)
         row.addWidget(QLabel("Mode"))
         self.mode_combo = QComboBox()
-        self.mode_combo.addItem("Local (faster-whisper)", "local")
-        self.mode_combo.addItem("Cloud — OpenRouter", "openrouter")
-        self.mode_combo.addItem("Cloud — Subunit (DSGVO)", "subunit")
+        for mode_id in ALL_MODES:
+            label = mode_label(mode_id)
+            if mode_id == "subunit":
+                label += "  ·  Recommended"
+            self.mode_combo.addItem(label, mode_id)
         idx = self.mode_combo.findData(config.mode)
         if idx >= 0:
             self.mode_combo.setCurrentIndex(idx)
@@ -236,6 +245,14 @@ class MainWindow(QMainWindow):
     def set_status(self, label: str, color: str = CYAN) -> None:
         self.status_lbl.setText(f"● {label}")
         self.status_lbl.setStyleSheet(f"color: {color};")
+
+    def refresh_mode(self) -> None:
+        """Re-sync the mode combo with config (after Settings dialog applied)."""
+        idx = self.mode_combo.findData(self.config.mode)
+        if idx >= 0 and idx != self.mode_combo.currentIndex():
+            self.mode_combo.blockSignals(True)
+            self.mode_combo.setCurrentIndex(idx)
+            self.mode_combo.blockSignals(False)
 
     def refresh(self) -> None:
         self.stat_count.findChild(QLabel, "value").setText(

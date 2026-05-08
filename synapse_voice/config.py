@@ -12,13 +12,33 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 @dataclass
 class Config:
     hotkey: str = "<ctrl>+<shift>+<space>"
-    mode: str = "local"  # local | openrouter | subunit
+    # mode: "local" | "subunit" | "openai" | "groq" | "custom"
+    mode: str = "local"
     local_model: str = "base"  # base | small | medium | large-v3
     local_device: str = "auto"  # auto | cpu | cuda
     language: str = "de"
-    openrouter_api_key: str = ""
+
+    # Subunit DSGVO endpoint (default — our own server)
     subunit_endpoint: str = "https://transcribe.subunit.ai/v1/transcribe"
     subunit_api_key: str = ""
+
+    # OpenAI Whisper (api.openai.com)
+    openai_api_key: str = ""
+    openai_model: str = "whisper-1"
+
+    # Groq Whisper (free tier, ~10x realtime)
+    groq_api_key: str = ""
+    groq_model: str = "whisper-large-v3-turbo"
+
+    # Custom OpenAI-compatible endpoint
+    custom_endpoint: str = ""
+    custom_api_key: str = ""
+    custom_model: str = "whisper-1"
+
+    # Legacy field — pre-v0.2.5 used OpenRouter via this key. Kept so old
+    # configs migrate quietly; no longer wired to anything functional.
+    openrouter_api_key: str = ""
+
     autopaste: bool = True
     target_lock: bool = True
     show_bubble: bool = True
@@ -37,7 +57,15 @@ class Config:
         try:
             data = json.loads(CONFIG_FILE.read_text())
             valid = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
-            return cls(**valid)
+            cfg = cls(**valid)
+            # Migrate pre-v0.2.5 "openrouter" mode → "openai" (the OpenRouter
+            # whisper endpoint never actually existed; their /audio/transcriptions
+            # returns HTTP 400 for any request). Persist the migration so the
+            # legacy mode doesn't keep getting re-translated each launch.
+            if cfg.mode == "openrouter":
+                cfg.mode = "openai"
+                cfg.save()
+            return cfg
         except (json.JSONDecodeError, TypeError):
             # Corrupted config — back it up so the user can recover the history,
             # then start fresh. Don't silently overwrite.

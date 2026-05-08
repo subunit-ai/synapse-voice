@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from . import __version__
 from .config import Config
 from .hotkey import GlobalHotkey
+from .logger import get as _get_logger, init_logging, log_file_path
 from .recorder import Recorder
 from .target_lock import WindowTarget, capture_active_window, paste_into
 from .transcriber import TranscriberError, get_transcriber
@@ -20,6 +21,8 @@ from .ui.history import HistoryDialog
 from .ui.main_window import MainWindow
 from .ui.settings import SettingsDialog
 from .ui.tray import Tray
+
+_log = _get_logger(__name__)
 
 
 class _PrewarmWorker(QObject):
@@ -59,8 +62,10 @@ class TranscribeWorker(QObject):
             text = transcriber.transcribe(self._audio, language=self._config.language)
             self.finished.emit(text)
         except TranscriberError as e:
+            _log.error("Transcribe failed (mode=%s): %s", self._mode, e)
             self.failed.emit(str(e))
         except Exception as e:  # surface unexpected backend errors instead of crashing
+            _log.exception("Unexpected transcribe error (mode=%s)", self._mode)
             self.failed.emit(f"{type(e).__name__}: {e}")
 
 
@@ -138,16 +143,19 @@ class SynapseVoiceApp(QObject):
         # Pre-flight: if the selected mode needs credentials we don't have,
         # prompt the user to fill them in instead of recording 30s of audio
         # and only then surfacing "API key missing".
-        if self.config.mode == "openrouter" and not self.config.openrouter_api_key:
-            self._prompt_for_credentials(
-                "OpenRouter mode needs an API key. Open Settings to add it?"
-            )
+        from .transcriber.base import preflight_check
+
+        missing = preflight_check(self.config.mode, self.config)
+        if missing:
+            self._prompt_for_credentials(missing)
             return
 
         self.target = capture_active_window() if self.config.target_lock else None
         try:
             self.recorder.start()
+            _log.info("Recording started (target=%s)", self.target.title if self.target else None)
         except Exception as e:
+            _log.exception("Mic error on start")
             self._show_error(f"Mic error: {e}")
             return
         title = self.target.title if self.target else "no target"
@@ -221,7 +229,7 @@ class SynapseVoiceApp(QObject):
         else:
             self.bubble.show_state("error", "paste failed", auto_hide_ms=2800)
             self.tray.set_state("error", "paste failed")
-        QTimer.singleShot(2500, lambda: (self.tray.set_state("idle", "idle"), self.main_window.set_status("idle")))
+        QTimer.singleShot(2500, lambda: (self.tray.set_state("idle", "idle"), self._safe_status("idle")))
 
     def _on_transcribe_failed(self, message: str) -> None:
         # Auth / credentials problems are user-fixable in Settings — surface a
@@ -243,11 +251,12 @@ class SynapseVoiceApp(QObject):
         self._show_error(message)
 
     def _show_error(self, message: str) -> None:
+        _log.error("UI error surfaced: %s", message)
         self.tray.set_state("error", "error")
         self._safe_status("error", color="#ffc450")
         self.bubble.show_state("error", f"⚠ {message[:60]}", auto_hide_ms=5000)
         self.tray.showMessage("Synapse Voice — error", message, msecs=4000)
-        QTimer.singleShot(3000, lambda: (self.tray.set_state("idle", "idle"), self.main_window.set_status("idle")))
+        QTimer.singleShot(3000, lambda: (self.tray.set_state("idle", "idle"), self._safe_status("idle")))
 
     def _record_history(self, text: str, mode: str) -> None:
         entry = {
@@ -273,9 +282,18 @@ class SynapseVoiceApp(QObject):
         if dlg.exec():
             old_hotkey = self.config.hotkey
             dlg.apply_to(self.config)
+            # Settings can change credentials/endpoint/model — drop the cached
+            # transcriber instances so the next call uses the new values.
+            from .transcriber import clear_cache as _clear_transcriber_cache
+
+            _clear_transcriber_cache()
             if self.config.hotkey != old_hotkey:
                 self.hotkey.update(self.config.hotkey)
             self.tray.set_mode(self.config.mode)
+            try:
+                self.main_window.refresh_mode()
+            except Exception:
+                pass
             self.tray.showMessage(
                 "Synapse Voice",
                 f"Updated. Hotkey: {self.config.hotkey} · Mode: {self.config.mode}",
@@ -334,41 +352,8 @@ class SynapseVoiceApp(QObject):
         QApplication.instance().quit()
 
 
-def _setup_logging() -> "Path":
-    """File logger so silent crashes on Windows GUI builds are diagnosable."""
-    from pathlib import Path
-
-    if sys.platform == "win32":
-        log_dir = Path.home() / "AppData" / "Local" / "synapse-voice" / "logs"
-    else:
-        log_dir = Path.home() / ".local" / "share" / "synapse-voice" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "synapse-voice.log"
-
-    def _excepthook(exctype, value, tb):
-        ts = datetime.now(timezone.utc).isoformat()
-        try:
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"\n=== {ts} ===\n")
-                traceback.print_exception(exctype, value, tb, file=f)
-        except Exception:
-            pass
-        traceback.print_exception(exctype, value, tb)
-
-    sys.excepthook = _excepthook
-    try:
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(
-                f"\n[{datetime.now(timezone.utc).isoformat()}] "
-                f"synapse-voice {__version__} starting on {sys.platform}\n"
-            )
-    except Exception:
-        pass
-    return log_file
-
-
 def main() -> int:
-    log_file = _setup_logging()
+    log_file = init_logging(__version__)
 
     try:
         app = QApplication(sys.argv)
@@ -387,23 +372,21 @@ def main() -> int:
         signal.signal(signal.SIGINT, signal.SIG_DFL)
 
         sv = SynapseVoiceApp()
+        _log.info("App ready (mode=%s, hotkey=%s)", sv.config.mode, sv.config.hotkey)
         return app.exec()
     except Exception:
-        # Last-resort: log + show error dialog so Windows users see *something*
-        import traceback as _tb
-
-        err = _tb.format_exc()
-        try:
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"\n=== fatal: {datetime.now(timezone.utc).isoformat()} ===\n{err}\n")
-        except Exception:
-            pass
+        _log.exception("Fatal error during app startup")
         try:
             from PyQt6.QtWidgets import QApplication as _QA, QMessageBox as _QM
 
             if _QA.instance() is None:
                 _QA(sys.argv)
-            _QM.critical(None, "Synapse Voice — fatal error", f"{err}\n\nLog: {log_file}")
+            err = traceback.format_exc()
+            _QM.critical(
+                None,
+                "Synapse Voice — fatal error",
+                f"{err}\n\nLog: {log_file}",
+            )
         except Exception:
             pass
         return 2

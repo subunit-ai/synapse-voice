@@ -21,6 +21,9 @@ ROOT = Path(SPECPATH).parent
 extra_datas = []
 extra_datas += collect_data_files("faster_whisper")
 extra_datas += collect_data_files("tokenizers")
+# Brand assets — the icons/ folder must ship with the bundle so the
+# BrandLogo widget + tray icon can find subunit-logo.png at runtime.
+extra_datas.append((str(ROOT / "icons" / "subunit-logo.png"), "icons"))
 # ctranslate2 + onnxruntime ship native shared libs that aren't picked up unless
 # we explicitly collect them.
 extra_binaries = []
@@ -35,9 +38,10 @@ a = Analysis(
     hiddenimports=[
         "synapse_voice",
         "synapse_voice.autostart",
+        "synapse_voice.logger",
         "synapse_voice.transcriber",
         "synapse_voice.transcriber.local",
-        "synapse_voice.transcriber.openrouter",
+        "synapse_voice.transcriber.cloud",
         "synapse_voice.transcriber.subunit",
         "synapse_voice.ui",
         "synapse_voice.ui.tray",
@@ -46,6 +50,7 @@ a = Analysis(
         "synapse_voice.ui.history",
         "synapse_voice.ui.hotkey_capture",
         "synapse_voice.ui.main_window",
+        "synapse_voice.ui.widgets",
         # faster-whisper deps that PyInstaller's static analysis sometimes misses
         "faster_whisper",
         "ctranslate2",

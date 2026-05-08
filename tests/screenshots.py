@@ -19,9 +19,12 @@ OUT.mkdir(parents=True, exist_ok=True)
 NIGHT_BG = QColor(8, 16, 28)
 
 
-def shot_widget(widget, name: str, padding: int = 24) -> Path:
-    widget.adjustSize()
+def shot_widget(widget, name: str, padding: int = 24, skip_adjust: bool = False) -> Path:
+    if not skip_adjust:
+        widget.adjustSize()
+    widget.show()
     widget.repaint()
+    QApplication.processEvents()
     QApplication.processEvents()
 
     inner = widget.grab()
@@ -102,10 +105,20 @@ def main() -> int:
     b.show_state("error", "⚠ no audio captured", auto_hide_ms=0, anchor_to_cursor=False)
     shot_widget(b, "bubble-error")
 
-    print("Rendering settings dialog...")
+    print("Rendering settings dialog (general tab)...")
     s = SettingsDialog(cfg)
-    s.resize(440, 480)
-    shot_widget(s, "settings", padding=12)
+    s.resize(720, 720)
+    shot_widget(s, "settings", padding=12, skip_adjust=True)
+
+    print("Rendering settings dialog (transcription tab)...")
+    s.tabs.setCurrentIndex(1)
+    s.repaint()
+    shot_widget(s, "settings-transcription", padding=12, skip_adjust=True)
+
+    print("Rendering settings dialog (about tab)...")
+    s.tabs.setCurrentIndex(2)
+    s.repaint()
+    shot_widget(s, "settings-about", padding=12, skip_adjust=True)
 
     print("Rendering history dialog...")
     h = HistoryDialog(cfg, on_repaste=lambda _t: None)

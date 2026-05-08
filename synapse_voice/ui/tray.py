@@ -8,17 +8,17 @@ from PyQt6.QtGui import QAction, QActionGroup, QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
 
 from .. import __version__
+from ..transcriber import ALL_MODES, mode_label
+from .widgets import make_logo_pixmap
 
 
-def _make_icon(color: QColor, size: int = 22) -> QIcon:
-    pix = QPixmap(size, size)
-    pix.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pix)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(color)
-    p.drawEllipse(2, 2, size - 4, size - 4)
-    p.end()
+def _make_icon(color: QColor, size: int = 64) -> QIcon:
+    """Tray icon — tinted brand logo at the requested colour.
+
+    QSystemTrayIcon scales whatever pixmap we give it to the platform's
+    preferred tray size. Render at 64×64 so it stays crisp on hi-DPI Win11.
+    """
+    pix = make_logo_pixmap(size=size, color=color)
     return QIcon(pix)
 
 
@@ -74,11 +74,10 @@ class Tray(QSystemTrayIcon):
         self._mode_menu = self._menu.addMenu("Mode")
         self._mode_group = QActionGroup(self._menu)
         self._mode_group.setExclusive(True)
-        for mode_id, label in (
-            ("local", "Local (faster-whisper)"),
-            ("openrouter", "Cloud — OpenRouter"),
-            ("subunit", "Cloud — Subunit (DSGVO, Phase 3)"),
-        ):
+        for mode_id in ALL_MODES:
+            label = mode_label(mode_id)
+            if mode_id == "subunit":
+                label += "  ·  Recommended"
             act = QAction(label, self._mode_menu, checkable=True)
             act.setData(mode_id)
             act.setChecked(mode_id == current_mode)
