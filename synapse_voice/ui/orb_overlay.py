@@ -190,67 +190,83 @@ class OrbOverlay(QWidget):
         elif self._state == "done":
             accent, accent_deep = GREEN, QColor(30, 90, 50)
 
-        # Outer halo — gentle breathing pulse when idle, stronger on audio.
-        # The halo size stays roughly constant; only alpha changes — so the
-        # orb doesn't appear to "grow and shrink" violently.
-        if self.config.orb_idle_pulse or self._state != "idle":
-            breath = 0.5 + 0.5 * math.sin(self._pulse_phase * 0.7)
-        else:
-            breath = 0.5
-        halo_strength = (
-            0.55 * breath + self._level_smooth * 1.4
-            if self._state != "idle"
-            else 0.35 * breath
-        )
-        for i in range(self.PADDING - 14, 0, -3):
-            alpha = int(34 * halo_strength * (1 - i / (self.PADDING - 14)))
-            if alpha <= 0:
-                continue
-            color = QColor(accent)
-            color.setAlpha(alpha)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(color)
-            p.drawEllipse(
-                int(cx - self.DOT_RADIUS - i),
-                int(cy - self.DOT_RADIUS - i),
-                int((self.DOT_RADIUS + i) * 2),
-                int((self.DOT_RADIUS + i) * 2),
-            )
+        # TJ-feedback v0.3.18: idle = nearly invisible (Voicely-tier
+        # minimalism). Only light up when hovered or actively
+        # recording/transcribing. Mix factor blends the dim/full
+        # palettes so the transition is animated by hover_opacity.
+        is_active = self._state != "idle"
+        # 0 = fully dim idle, 1 = fully lit
+        lit = 1.0 if is_active else self._satellite_opacity
 
-        # Main dot — glass-morph with deep gradient
-        grad = QRadialGradient(cx - 3, cy - 4, self.DOT_RADIUS * 1.4)
-        grad.setColorAt(0.0, _bright(accent, 30))
-        grad.setColorAt(0.6, accent)
-        grad.setColorAt(1.0, accent_deep)
-        p.setBrush(QBrush(grad))
+        # Outer halo — only when lit. Idle = no halo at all.
+        if lit > 0.01:
+            if self.config.orb_idle_pulse or is_active:
+                breath = 0.5 + 0.5 * math.sin(self._pulse_phase * 0.7)
+            else:
+                breath = 0.5
+            halo_strength = (
+                0.55 * breath + self._level_smooth * 1.4
+                if is_active
+                else 0.35 * breath
+            ) * lit
+            for i in range(self.PADDING - 14, 0, -3):
+                alpha = int(34 * halo_strength * (1 - i / (self.PADDING - 14)))
+                if alpha <= 0:
+                    continue
+                color = QColor(accent)
+                color.setAlpha(alpha)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(color)
+                p.drawEllipse(
+                    int(cx - self.DOT_RADIUS - i),
+                    int(cy - self.DOT_RADIUS - i),
+                    int((self.DOT_RADIUS + i) * 2),
+                    int((self.DOT_RADIUS + i) * 2),
+                )
+
+        # Main dot — colored when lit (hover/active), dim grey when idle.
+        # Blends along `lit` so the transition is smooth.
+        if lit > 0.01:
+            grad = QRadialGradient(cx - 3, cy - 4, self.DOT_RADIUS * 1.4)
+            grad.setColorAt(0.0, _blend(_DIM_DOT, _bright(accent, 30), lit))
+            grad.setColorAt(0.6, _blend(_DIM_DOT, accent, lit))
+            grad.setColorAt(1.0, _blend(_DIM_DOT_DEEP, accent_deep, lit))
+            p.setBrush(QBrush(grad))
+        else:
+            # Idle, not hovered — single muted grey, no gradient flair
+            p.setBrush(_DIM_DOT)
         p.setPen(QPen(GLASS_RIM, 1.0))
         p.drawEllipse(
             cx - self.DOT_RADIUS, cy - self.DOT_RADIUS,
             self.DOT_RADIUS * 2, self.DOT_RADIUS * 2,
         )
 
-        # Inner pulse — small concentric circle that breathes (signals "alive")
-        inner_r = max(
-            2,
-            int(
-                self.DOT_RADIUS * 0.35
-                + 2.0 * math.sin(self._pulse_phase * 1.4)
-                + self._level_smooth * (self.DOT_RADIUS * 0.5)
-            ),
-        )
-        inner_color = QColor(255, 255, 255, 180 if self._state != "idle" else 110)
-        p.setBrush(inner_color)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(cx - inner_r, cy - inner_r, inner_r * 2, inner_r * 2)
+        # Inner pulse — visible only when lit, signals "alive" without
+        # being distracting in idle.
+        if lit > 0.01:
+            inner_r = max(
+                2,
+                int(
+                    self.DOT_RADIUS * 0.35
+                    + 2.0 * math.sin(self._pulse_phase * 1.4)
+                    + self._level_smooth * (self.DOT_RADIUS * 0.5)
+                ),
+            )
+            inner_alpha = int((180 if is_active else 110) * lit)
+            inner_color = QColor(255, 255, 255, inner_alpha)
+            p.setBrush(inner_color)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawEllipse(cx - inner_r, cy - inner_r, inner_r * 2, inner_r * 2)
 
-        # Specular highlight
-        p.setBrush(QColor(255, 255, 255, 90))
-        p.drawEllipse(
-            cx - int(self.DOT_RADIUS * 0.55),
-            cy - int(self.DOT_RADIUS * 0.65),
-            max(2, int(self.DOT_RADIUS * 0.32)),
-            max(2, int(self.DOT_RADIUS * 0.32)),
-        )
+        # Specular highlight — also fades with lit
+        if lit > 0.01:
+            p.setBrush(QColor(255, 255, 255, int(90 * lit)))
+            p.drawEllipse(
+                cx - int(self.DOT_RADIUS * 0.55),
+                cy - int(self.DOT_RADIUS * 0.65),
+                max(2, int(self.DOT_RADIUS * 0.32)),
+                max(2, int(self.DOT_RADIUS * 0.32)),
+            )
 
         # Satellite dots (faded by hover-opacity so they dissolve in/out)
         if self._satellite_opacity > 0.02:
@@ -408,11 +424,16 @@ class OrbOverlay(QWidget):
                 on_pick=self._pick_mode,
             )
         elif name == "right":
+            current = "off" if not self.config.cleanup_enabled else self.config.cleanup_style
             self._open_choice_popup(
                 anchor_global,
-                title="Cleanup style",
-                options=[("tidy", "Tidy"), ("formal", "Formal")],
-                current=self.config.cleanup_style,
+                title="Cleanup",
+                options=[
+                    ("off", "Off"),
+                    ("tidy", "Tidy"),
+                    ("formal", "Formal"),
+                ],
+                current=current,
                 on_pick=self._pick_style,
             )
         elif name == "left":
@@ -430,9 +451,13 @@ class OrbOverlay(QWidget):
         self.update()
 
     def _pick_style(self, choice: str) -> None:
-        if choice not in ("tidy", "formal"):
+        if choice == "off":
+            self.config.cleanup_enabled = False
+        elif choice in ("tidy", "formal"):
+            self.config.cleanup_enabled = True
+            self.config.cleanup_style = choice
+        else:
             return
-        self.config.cleanup_style = choice
         self.config.save()
         self.update()
 
@@ -633,4 +658,21 @@ def _bright(c: QColor, by: int) -> QColor:
         min(255, c.green() + by),
         min(255, c.blue() + by),
         c.alpha(),
+    )
+
+
+# Idle palette — neutral dim grey so the orb disappears into the background
+# until the user hovers it. Voicely-tier minimalism.
+_DIM_DOT = QColor(64, 78, 96, 200)
+_DIM_DOT_DEEP = QColor(20, 30, 44, 220)
+
+
+def _blend(a: QColor, b: QColor, t: float) -> QColor:
+    """Linearly interpolate two QColors. t=0 → a, t=1 → b."""
+    t = max(0.0, min(1.0, t))
+    return QColor(
+        int(a.red() * (1 - t) + b.red() * t),
+        int(a.green() * (1 - t) + b.green() * t),
+        int(a.blue() * (1 - t) + b.blue() * t),
+        int(a.alpha() * (1 - t) + b.alpha() * t),
     )

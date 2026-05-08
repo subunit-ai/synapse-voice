@@ -23,7 +23,7 @@
     cloud: {
       title: 'Cloud Mode',
       sub: 'Schnellere Verarbeitung ueber Subunit EU-Server',
-      note: '🇪🇺 Frankfurt · DSGVO-konform · End-to-End verschluesselt',
+      note: '🇪🇺 Hamburg · DSGVO-konform · End-to-End verschluesselt',
     },
   };
 

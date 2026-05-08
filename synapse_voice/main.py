@@ -502,6 +502,9 @@ class SynapseVoiceApp(QObject):
         if not self.config.has_seen_onboarding:
             self.config.has_seen_onboarding = True
             self.config.save()
+        # TJ-feedback v0.3.18: after the wizard, open the main window
+        # automatically. Closing into nothing felt like the app crashed.
+        QTimer.singleShot(150, self.open_window)
 
     def open_history(self) -> None:
         def repaste(text: str) -> None:

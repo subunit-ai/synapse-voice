@@ -38,7 +38,7 @@ Stand 2026-05-08, abgeleitet aus TJs Voicely-Walkthrough + heutigen Tests.
 - [ ] Three.js animated EU-Globe mit Pulsen
 - [ ] Normal/Privacy-Mode Toggle-Demo (animiert)
 - [ ] DSGVO-Hero im Subunit-Cyan
-- [ ] EU-Server-Frankfurt-Hervorhebung
+- [ ] EU-Server-Hamburg-Hervorhebung
 - [ ] Cloudflare-Pages Deploy
 - [ ] Eigenes Repo `marketing/` im Synapse-Voice-Projekt
 

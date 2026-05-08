@@ -72,6 +72,68 @@ QPushButton#ghost:hover {{ color: {WHITE}; }}
 """
 
 
+class WelcomeHero(QWidget):
+    """A breathing cyan orb that anchors the welcome page. Subtly
+    animated so the page feels alive without being busy. Replaces the
+    "altbacken" feeling TJ flagged on v0.3.15."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFixedSize(180, 110)
+        self._phase = 0.0
+        self._tick = QTimer(self)
+        self._tick.setInterval(33)
+        self._tick.timeout.connect(self._on_tick)
+        self._tick.start()
+
+    def _on_tick(self) -> None:
+        import math as _m
+
+        self._phase += 0.04
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        import math as _m
+
+        from PyQt6.QtGui import QRadialGradient
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        cx = self.width() // 2
+        cy = self.height() // 2 + 4
+        r = 36
+        breath = 0.5 + 0.5 * _m.sin(self._phase * 0.8)
+
+        # Outer halo rings
+        for i in range(28, 0, -3):
+            alpha = int(36 * breath * (1 - i / 28))
+            color = QColor(64, 214, 255, alpha)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(color)
+            p.drawEllipse(cx - r - i, cy - r - i, (r + i) * 2, (r + i) * 2)
+
+        # Core orb
+        grad = QRadialGradient(cx - 6, cy - 8, r * 1.4)
+        grad.setColorAt(0.0, QColor(120, 230, 255))
+        grad.setColorAt(0.6, QColor(64, 214, 255))
+        grad.setColorAt(1.0, QColor(20, 96, 130))
+        from PyQt6.QtGui import QBrush
+
+        p.setBrush(QBrush(grad))
+        p.setPen(QPen(QColor(255, 255, 255, 90), 1.0))
+        p.drawEllipse(cx - r, cy - r, r * 2, r * 2)
+
+        # Inner pulse
+        inner = max(6, int(12 + 4 * _m.sin(self._phase * 1.5)))
+        p.setBrush(QColor(255, 255, 255, 200))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(cx - inner, cy - inner, inner * 2, inner * 2)
+
+        # Specular
+        p.setBrush(QColor(255, 255, 255, 130))
+        p.drawEllipse(cx - 18, cy - 22, 12, 12)
+
+
 class _StepDot(QWidget):
     """Tiny progress indicator dot — solid cyan when reached, dim otherwise."""
 
@@ -205,28 +267,40 @@ class OnboardingDialog(QDialog):
     def _build_welcome(self) -> QWidget:
         page = QWidget()
         l = QVBoxLayout(page)
-        l.setContentsMargins(0, 24, 0, 24)
-        l.setSpacing(16)
+        l.setContentsMargins(0, 18, 0, 18)
+        l.setSpacing(14)
 
+        # Hero glyph with cyan halo — gives the page some visual weight
+        # so it doesn't read as just a feature-list dump.
+        hero = WelcomeHero()
+        l.addWidget(hero, 0, Qt.AlignmentFlag.AlignCenter)
+
+        # Feature rows fade in staggered when the page first appears.
+        # Stored on the dialog so re-entering the page replays the
+        # animation.
+        self._welcome_rows: list[QWidget] = []
         feature_box = QVBoxLayout()
-        feature_box.setSpacing(14)
-        for icon, title, sub in [
+        feature_box.setSpacing(12)
+        features = [
             ("🔒", "Local-first by default",
              "Audio never leaves your machine — unless you opt in to cloud."),
             ("⚡", "Whisper-quality, zero friction",
              "Press a hotkey, speak, paste. No window-switching, no copy-paste."),
             ("🇪🇺", "DSGVO-compliant cloud option",
-             "If you switch to cloud, the Subunit-Server runs in Frankfurt."),
+             "If you switch to cloud, the Subunit-Server runs in Hamburg."),
             ("🎯", "Built for daily dictation",
              "Lexikon for proper nouns. AI cleanup. 99 languages. Auto-update."),
-        ]:
-            row = QHBoxLayout()
-            row.setSpacing(14)
+        ]
+        for icon, title, sub in features:
+            row = QWidget()
+            rh = QHBoxLayout(row)
+            rh.setContentsMargins(0, 0, 0, 0)
+            rh.setSpacing(14)
             ic = QLabel(icon)
             f = QFont()
             f.setPointSize(20)
             ic.setFont(f)
-            row.addWidget(ic, 0, Qt.AlignmentFlag.AlignTop)
+            rh.addWidget(ic, 0, Qt.AlignmentFlag.AlignTop)
             text_col = QVBoxLayout()
             text_col.setSpacing(2)
             t = QLabel(title)
@@ -236,11 +310,38 @@ class OnboardingDialog(QDialog):
             s.setStyleSheet(f"color: {WHITE_DIM}; font-size: 12px;")
             s.setWordWrap(True)
             text_col.addWidget(s)
-            row.addLayout(text_col, 1)
-            feature_box.addLayout(row)
+            rh.addLayout(text_col, 1)
+            feature_box.addWidget(row)
+            # Wire each row with its own opacity effect so we can
+            # cascade fade-ins.
+            eff = QGraphicsOpacityEffect(row)
+            eff.setOpacity(0.0)
+            row.setGraphicsEffect(eff)
+            row._opacity_effect = eff
+            self._welcome_rows.append(row)
         l.addLayout(feature_box)
         l.addStretch()
         return page
+
+    def _animate_welcome_in(self) -> None:
+        """Cascade fade-in of the feature rows after the welcome page is
+        shown. Each row delayed by ~80ms so the eye is drawn down the list."""
+        # Keep refs to anims so they're not garbage-collected mid-animation
+        if not hasattr(self, "_welcome_anims"):
+            self._welcome_anims = []
+        self._welcome_anims.clear()
+        for i, row in enumerate(getattr(self, "_welcome_rows", [])):
+            eff = getattr(row, "_opacity_effect", None)
+            if eff is None:
+                continue
+            eff.setOpacity(0.0)
+            anim = QPropertyAnimation(eff, b"opacity", self)
+            anim.setDuration(420)
+            anim.setStartValue(0.0)
+            anim.setEndValue(1.0)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            QTimer.singleShot(80 * i, anim.start)
+            self._welcome_anims.append(anim)
 
     def _build_hotkey(self) -> QWidget:
         page = QWidget()
@@ -313,7 +414,7 @@ class OnboardingDialog(QDialog):
             icon="☁",
             title="Cloud",
             subtitle="Faster, more accurate",
-            body="Routed through Subunit-Server in Frankfurt. "
+            body="Routed through Subunit-Server in Hamburg. "
                  "DSGVO-compliant. "
                  "Slightly faster than Local on a typical laptop.",
             badge="EU only",
@@ -384,6 +485,9 @@ class OnboardingDialog(QDialog):
         is_last = idx == self.stack.count() - 1
         self.next_btn.setText("Finish" if is_last else "Next")
         self.skip_btn.setVisible(not is_last)
+        # Trigger the welcome cascade-fade when entering page 0
+        if idx == 0:
+            QTimer.singleShot(120, self._animate_welcome_in)
 
     def _go_next(self) -> None:
         idx = self.stack.currentIndex()
