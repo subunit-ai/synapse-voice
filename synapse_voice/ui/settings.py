@@ -394,7 +394,6 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self.row_cleanup)
         self.cleanup_style_combo = QComboBox()
-        self.cleanup_style_combo.addItem("Tidy — light cleanup, keep wording", "tidy")
         self.cleanup_style_combo.addItem("Prompt — rewrite as structured AI prompt", "prompt")
         self.cleanup_style_combo.addItem("Email — polite, well-structured email body", "email")
         self.cleanup_style_combo.addItem("Slack — short casual chat message", "slack")

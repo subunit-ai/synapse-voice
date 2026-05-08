@@ -60,9 +60,13 @@ class Config:
     orb_position: str = "bottom-center"
     orb_idle_pulse: bool = True
 
-    # v0.3.0: AI cleanup layer
+    # v0.3.0: AI cleanup layer (default off — TJ-pref)
     cleanup_enabled: bool = False
-    cleanup_style: str = "tidy"  # tidy | formal
+    # v0.3.24: default style flipped from tidy → prompt because Synapse Voice's
+    # primary use is dictating prompts to AI agents. Tidy was dropped from
+    # the picker (TJ feedback "kommt mir komisch"). Old configs with
+    # cleanup_style='tidy' get migrated to 'prompt' on load.
+    cleanup_style: str = "prompt"  # prompt | email | slack | formal
 
     # v0.3.0: Recording mode. Default = hold (Push-to-Talk) since TJ
     # confirmed Voicely's default works better — press-and-hold maps
@@ -133,6 +137,12 @@ class Config:
             # legacy mode doesn't keep getting re-translated each launch.
             if cfg.mode == "openrouter":
                 cfg.mode = "openai"
+                cfg.save()
+            # v0.3.24: tidy was the old default + has been dropped from the
+            # picker. Anyone whose saved style is still "tidy" gets bumped
+            # to the new default ("prompt") on load.
+            if cfg.cleanup_style == "tidy":
+                cfg.cleanup_style = "prompt"
                 cfg.save()
             return cfg
         except (json.JSONDecodeError, TypeError):

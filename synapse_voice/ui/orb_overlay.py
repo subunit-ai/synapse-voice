@@ -99,12 +99,36 @@ class OrbOverlay(QWidget):
         side = (self.DOT_RADIUS + self.PADDING) * 2
         self.resize(side, side)
 
+        # v0.3.24: click-through outside the visible dot. The window itself
+        # is much larger than the dot (PADDING reserves room for halo + the
+        # 3 satellites), but clicks on those empty pixels should pass
+        # through to the app underneath. We mask the hit-testable region
+        # to a circle around the dot while idle. When the user actually
+        # hovers the dot, _on_tick expands the mask to include the
+        # satellites so they remain clickable.
+        self._update_input_mask(hovered=False)
+
         self._tick = QTimer(self)
         self._tick.setInterval(33)
         self._tick.timeout.connect(self._on_tick)
         self._tick.start()
 
         self._reposition()
+
+    def _update_input_mask(self, hovered: bool) -> None:
+        """Set a circular hit-test mask. Idle = just the dot (clicks pass
+        through everywhere else). Hovered/active = full window so the
+        satellites + halo react to clicks."""
+        from PyQt6.QtGui import QRegion
+
+        cx = cy = self.DOT_RADIUS + self.PADDING
+        if hovered:
+            # Full bounds — satellites + halo are interactive.
+            r = self.DOT_RADIUS + self.PADDING
+        else:
+            # Just the dot + a couple of pixels for forgiving hover.
+            r = self.DOT_RADIUS + 4
+        self.setMask(QRegion(cx - r, cy - r, r * 2, r * 2, QRegion.RegionType.Ellipse))
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -362,10 +386,14 @@ class OrbOverlay(QWidget):
 
     def enterEvent(self, _e) -> None:
         self._hovered = True
+        # v0.3.24: expand hit-test mask so satellites become clickable
+        # while we're hovered. The mask shrinks back on leave.
+        self._update_input_mask(hovered=True)
         self.update()
 
     def leaveEvent(self, _e) -> None:
         self._hovered = False
+        self._update_input_mask(hovered=False)
         self.update()
 
     def mousePressEvent(self, e) -> None:
@@ -430,7 +458,6 @@ class OrbOverlay(QWidget):
                 title="Cleanup",
                 options=[
                     ("off", "Off"),
-                    ("tidy", "Tidy"),
                     ("prompt", "Prompt"),
                     ("email", "Email"),
                     ("slack", "Slack"),
@@ -456,7 +483,7 @@ class OrbOverlay(QWidget):
     def _pick_style(self, choice: str) -> None:
         if choice == "off":
             self.config.cleanup_enabled = False
-        elif choice in ("tidy", "prompt", "email", "slack", "formal"):
+        elif choice in ("prompt", "email", "slack", "formal"):
             self.config.cleanup_enabled = True
             self.config.cleanup_style = choice
         else:
