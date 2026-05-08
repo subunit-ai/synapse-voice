@@ -54,6 +54,7 @@ class CloudTranscriber:
         self.endpoint = endpoint
         self.api_key = api_key
         self.model = model
+        self.initial_prompt = ""  # set by dispatcher when vocabulary exists
 
     def transcribe(self, audio: np.ndarray, language: str = "de") -> str:
         if audio.size == 0:
@@ -62,6 +63,11 @@ class CloudTranscriber:
         headers = {"Authorization": f"Bearer {self.api_key}"}
         files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
         data = {"model": self.model, "language": language}
+        # OpenAI's /v1/audio/transcriptions accepts a "prompt" field that
+        # biases the model — same format used by Groq + most OpenAI-compat
+        # providers, so we pass it through unconditionally.
+        if self.initial_prompt:
+            data["prompt"] = self.initial_prompt
         try:
             r = requests.post(
                 self.endpoint, headers=headers, files=files, data=data, timeout=60

@@ -38,9 +38,47 @@ def mode_label(mode: str) -> str:
     }.get(mode, mode)
 
 
+def _vocab_prompt(config) -> str:
+    """Build the Whisper initial_prompt from the user's Lexikon entries.
+    Whisper biases toward terms in the prompt — passing the canonical
+    spellings makes it much more likely to transcribe them correctly."""
+    vocab = getattr(config, "vocabulary", None) or []
+    terms = [v.get("write_as", "").strip() for v in vocab]
+    return ", ".join(t for t in terms if t)
+
+
+def apply_vocab_replace(text: str, config) -> str:
+    """Post-process: literal-replace any Lexikon `sounds_like` matches with
+    the canonical `write_as`. Case-insensitive, word-boundary-aware so we
+    don't replace inside other words. Runs after transcription + cleanup."""
+    import re
+
+    vocab = getattr(config, "vocabulary", None) or []
+    out = text
+    for entry in vocab:
+        sounds = (entry.get("sounds_like") or "").strip()
+        canon = (entry.get("write_as") or "").strip()
+        if not sounds or not canon:
+            continue
+        # Word-boundary match, case-insensitive. \b inside Python re works
+        # well enough for ASCII; for the German umlaut case we extend the
+        # boundary class manually.
+        pattern = r"(?<![\wäöüÄÖÜß])" + re.escape(sounds) + r"(?![\wäöüÄÖÜß])"
+        out = re.sub(pattern, canon, out, flags=re.IGNORECASE)
+    return out
+
+
 def _cache_key(mode: str, config) -> tuple:
     if mode == "local":
-        return (mode, config.local_model, config.local_device)
+        # Include vocab prompt in the cache key so a Lexikon edit forces a
+        # new LocalTranscriber instance (the prompt is baked into the model
+        # at construction).
+        return (
+            mode,
+            config.local_model,
+            config.local_device,
+            _vocab_prompt(config),
+        )
     if mode == "subunit":
         return (mode, config.subunit_endpoint, getattr(config, "subunit_api_key", ""))
     if mode == "openai":
@@ -82,11 +120,20 @@ def get_transcriber(mode: str, config) -> Transcriber:
     key = _cache_key(mode, config)
     cached = _TRANSCRIBER_CACHE.get(key)
     if cached is not None:
+        # Cloud modes: vocab is applied via inst.initial_prompt after
+        # construction, so re-sync from current config on every access
+        # (vocab edits don't invalidate the cache key for cloud).
+        if hasattr(cached, "initial_prompt") and mode != "local":
+            cached.initial_prompt = _vocab_prompt(config)
         return cached
     if mode == "local":
         from .local import LocalTranscriber
 
-        inst = LocalTranscriber(model=config.local_model, device=config.local_device)
+        inst = LocalTranscriber(
+            model=config.local_model,
+            device=config.local_device,
+            initial_prompt=_vocab_prompt(config),
+        )
     elif mode == "subunit":
         from .subunit import SubunitTranscriber
 
@@ -103,6 +150,7 @@ def get_transcriber(mode: str, config) -> Transcriber:
             api_key=config.openai_api_key,
             model=config.openai_model or PROVIDER_PRESETS["openai"]["model"],
         )
+        inst.initial_prompt = _vocab_prompt(config)
     elif mode == "groq":
         from .cloud import CloudTranscriber, PROVIDER_PRESETS
 
@@ -112,6 +160,7 @@ def get_transcriber(mode: str, config) -> Transcriber:
             api_key=config.groq_api_key,
             model=config.groq_model or PROVIDER_PRESETS["groq"]["model"],
         )
+        inst.initial_prompt = _vocab_prompt(config)
     elif mode == "custom":
         from .cloud import CloudTranscriber
 
@@ -121,6 +170,7 @@ def get_transcriber(mode: str, config) -> Transcriber:
             api_key=config.custom_api_key,
             model=config.custom_model or "whisper-1",
         )
+        inst.initial_prompt = _vocab_prompt(config)
     else:
         raise TranscriberError(f"Unknown mode: {mode}")
     _TRANSCRIBER_CACHE[key] = inst

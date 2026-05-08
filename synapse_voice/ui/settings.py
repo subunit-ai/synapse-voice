@@ -11,10 +11,13 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QPushButton,
     QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -204,6 +207,7 @@ class SettingsDialog(QDialog):
 
         self.tabs.addTab(self._build_general_tab(), "General")
         self.tabs.addTab(self._build_transcription_tab(), "Transcription")
+        self.tabs.addTab(self._build_vocabulary_tab(), "Vocabulary")
         self.tabs.addTab(self._build_overlay_tab(), "Overlay")
         self.tabs.addTab(self._build_account_tab(), "Account")
         self.tabs.addTab(self._build_about_tab(), "About")
@@ -546,7 +550,72 @@ class SettingsDialog(QDialog):
             mode = self.mode_combo.currentData() or "subunit"
             self.provider_stack.setCurrentIndex(self._panel_index.get(mode, 1))
 
-    # ── Tab 3: Overlay ─────────────────────────────────────────────────────
+    # ── Tab 3: Vocabulary (Lexikon) ────────────────────────────────────────
+
+    def _build_vocabulary_tab(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("tabPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(2, 18, 2, 18)
+        layout.setSpacing(10)
+
+        layout.addWidget(_section_title("Lexikon"))
+        layout.addWidget(_hint(
+            "Add custom vocabulary so Whisper transcribes brand names, "
+            "technical terms or proper nouns the way you want them. "
+            "Both columns are required for an entry to take effect."
+        ))
+
+        self.vocab_table = QTableWidget()
+        self.vocab_table.setColumnCount(2)
+        self.vocab_table.setHorizontalHeaderLabels(["Sounds like", "Write as"])
+        self.vocab_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.vocab_table.verticalHeader().setVisible(False)
+        # Pre-fill from config
+        existing = list(self.config.vocabulary or [])
+        self.vocab_table.setRowCount(max(8, len(existing) + 2))
+        for i, entry in enumerate(existing):
+            self.vocab_table.setItem(
+                i, 0, QTableWidgetItem(entry.get("sounds_like", ""))
+            )
+            self.vocab_table.setItem(
+                i, 1, QTableWidgetItem(entry.get("write_as", ""))
+            )
+        layout.addWidget(self.vocab_table, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        add_row = QPushButton("Add row")
+        add_row.clicked.connect(
+            lambda: self.vocab_table.setRowCount(self.vocab_table.rowCount() + 1)
+        )
+        btn_row.addWidget(add_row)
+        clear_row = QPushButton("Remove selected")
+        clear_row.clicked.connect(self._remove_vocab_row)
+        btn_row.addWidget(clear_row)
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+        return page
+
+    def _remove_vocab_row(self) -> None:
+        row = self.vocab_table.currentRow()
+        if row >= 0:
+            self.vocab_table.removeRow(row)
+
+    def _harvest_vocab(self) -> list[dict]:
+        out: list[dict] = []
+        for r in range(self.vocab_table.rowCount()):
+            sl_item = self.vocab_table.item(r, 0)
+            wa_item = self.vocab_table.item(r, 1)
+            sl = (sl_item.text().strip() if sl_item else "")
+            wa = (wa_item.text().strip() if wa_item else "")
+            if sl and wa:
+                out.append({"sounds_like": sl, "write_as": wa})
+        return out
+
+    # ── Tab 4: Overlay ─────────────────────────────────────────────────────
 
     def _build_overlay_tab(self) -> QWidget:
         page = QWidget()
@@ -780,6 +849,9 @@ class SettingsDialog(QDialog):
         config.orb_idle_pulse = self.row_orb_pulse.is_on()
         config.recording_mode = self.recording_mode_combo.currentData() or "toggle"
         config.mic_device_name = self.mic_combo.currentData() or ""
+        # v0.3.9 Lexikon: harvest vocab table into list[dict]
+        if hasattr(self, "vocab_table"):
+            config.vocabulary = self._harvest_vocab()
         config.cleanup_enabled = self.row_cleanup.is_on()
         config.cleanup_style = self.cleanup_style_combo.currentData() or "tidy"
         config.auto_update_check = self.row_auto_update.is_on()

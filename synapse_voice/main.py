@@ -98,6 +98,13 @@ class TranscribeWorker(QObject):
                         len(cleaned),
                     )
                     text = cleaned
+            # v0.3.9 Lexikon: post-process literal-replace pass to catch
+            # mishears the prompt didn't fix (Whisper sometimes ignores
+            # initial_prompt for non-canonical pronunciations).
+            if text and self._config.vocabulary:
+                from .transcriber.base import apply_vocab_replace
+
+                text = apply_vocab_replace(text, self._config)
             self.finished.emit(text)
         except TranscriberError as e:
             _log.error("Transcribe failed (mode=%s): %s", self._mode, e)

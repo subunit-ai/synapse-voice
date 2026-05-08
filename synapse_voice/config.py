@@ -75,6 +75,13 @@ class Config:
     # v0.3.0: Auto-update
     auto_update_check: bool = True
 
+    # v0.3.9: Lexikon — custom-vocab to bias Whisper toward correct
+    # spellings of brand names / technical terms / proper nouns. Each
+    # entry: {"sounds_like": "z.B. wie es klingt", "write_as": "Korrekt"}.
+    # The "write_as" values feed Whisper as initial_prompt; both are also
+    # used in a post-process replace so persistent mishears are corrected.
+    vocabulary: list[dict] = field(default_factory=list)
+
     history_size: int = 50
     history: list[dict] = field(default_factory=list)
     # Stats
