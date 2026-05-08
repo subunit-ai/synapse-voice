@@ -141,6 +141,7 @@ def get_transcriber(mode: str, config) -> Transcriber:
             endpoint=config.subunit_endpoint,
             api_key=getattr(config, "subunit_api_key", ""),
         )
+        inst.initial_prompt = _vocab_prompt(config)
     elif mode == "openai":
         from .cloud import CloudTranscriber, PROVIDER_PRESETS
 

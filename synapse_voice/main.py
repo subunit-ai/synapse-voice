@@ -419,14 +419,22 @@ class SynapseVoiceApp(QObject):
         dlg = SettingsDialog(self.config)
         if dlg.exec():
             old_hotkey = self.config.hotkey
+            old_mode = self.config.recording_mode
             dlg.apply_to(self.config)
             # Settings can change credentials/endpoint/model — drop the cached
             # transcriber instances so the next call uses the new values.
             from .transcriber import clear_cache as _clear_transcriber_cache
 
             _clear_transcriber_cache()
-            if self.config.hotkey != old_hotkey:
-                self.hotkey.update(self.config.hotkey)
+            # Restart the listener if either the combo OR the recording mode
+            # changed — `update()` swaps both atomically.
+            if (
+                self.config.hotkey != old_hotkey
+                or self.config.recording_mode != old_mode
+            ):
+                self.hotkey.update(
+                    self.config.hotkey, mode=self.config.recording_mode
+                )
             self.tray.set_mode(self.config.mode)
             try:
                 self.main_window.refresh_mode()
@@ -485,17 +493,17 @@ class SynapseVoiceApp(QObject):
                 self.config.save()
             self.config.has_seen_onboarding = True
             self.config.save()
-            # Re-bind hotkey listener if it changed
+            # Re-bind hotkey listener if it changed. `update()` handles
+            # stop+start atomically and uses the correct constructor kwargs;
+            # recreating the GlobalHotkey here used the wrong kwarg names and
+            # could leave the user with `has_seen_onboarding=True` and no
+            # working hotkey listener.
             try:
-                self.hotkey.stop()
+                self.hotkey.update(
+                    self.config.hotkey, mode=self.config.recording_mode
+                )
             except Exception:
-                pass
-            self.hotkey = GlobalHotkey(
-                self.config.hotkey,
-                on_press=self._on_hotkey_press,
-                on_release=self._on_hotkey_release,
-            )
-            self.hotkey.start()
+                _log.exception("Failed to update hotkey after onboarding")
             self.main_window.refresh()
             self.tray.showMessage(
                 "Synapse Voice",

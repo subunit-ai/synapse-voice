@@ -63,10 +63,18 @@ def _new_api_key() -> str:
     return f"sk-svc-{secrets.token_hex(24)}"
 
 
-def get_or_create(email: str) -> dict:
-    """Look up an account by email; create it if it doesn't exist.
+class EmailAlreadyRegistered(Exception):
+    """Raised when sign-up is called for an email that already has an
+    account. The caller must NOT return the existing api_key — that would
+    be account takeover by anyone who knows the email address."""
 
-    Returns {email, api_key, plan, created_at, is_new}.
+
+def create_account(email: str) -> dict:
+    """Create a new account for `email`. Raises EmailAlreadyRegistered if
+    the email is already on file (the caller must direct the user to a
+    proper recovery flow rather than echoing the existing key).
+
+    Returns {email, api_key, plan, created_at} on success.
     """
     email = email.strip().lower()
     if not email or "@" not in email:
@@ -75,17 +83,10 @@ def get_or_create(email: str) -> dict:
     now = int(time.time())
     with _conn() as c:
         row = c.execute(
-            "SELECT email, api_key, plan, created_at FROM accounts WHERE email = ?",
-            (email,),
+            "SELECT 1 FROM accounts WHERE email = ?", (email,)
         ).fetchone()
         if row:
-            return {
-                "email": row["email"],
-                "api_key": row["api_key"],
-                "plan": row["plan"],
-                "created_at": row["created_at"],
-                "is_new": False,
-            }
+            raise EmailAlreadyRegistered(email)
         api_key = _new_api_key()
         c.execute(
             """
@@ -99,8 +100,18 @@ def get_or_create(email: str) -> dict:
             "api_key": api_key,
             "plan": "free",
             "created_at": now,
-            "is_new": True,
         }
+
+
+def email_exists(email: str) -> bool:
+    email = email.strip().lower()
+    if not email:
+        return False
+    with _conn() as c:
+        row = c.execute(
+            "SELECT 1 FROM accounts WHERE email = ?", (email,)
+        ).fetchone()
+        return row is not None
 
 
 def lookup_by_key(api_key: str) -> dict | None:

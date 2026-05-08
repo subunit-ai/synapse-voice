@@ -230,26 +230,32 @@ def download_installer(
     actual = hasher.hexdigest()
     _log.info("Update SHA-256: %s", actual)
 
-    # Codex-finding (Must): verify hash before we hand the file to
-    # ShellExecute as admin. If the release didn't ship a hash (older
-    # release pre-CI-update), log a warning but continue — those still
-    # benefit from the host allowlist + UAC prompt.
-    if expected_sha256:
-        if actual.lower() != expected_sha256.lower():
-            try:
-                target.unlink()
-            except OSError:
-                pass
-            raise ValueError(
-                f"Installer hash mismatch — expected {expected_sha256}, "
-                f"got {actual}. File deleted, update aborted."
-            )
-        _log.info("Update hash verified ✓")
-    else:
-        _log.warning(
-            "No expected SHA-256 supplied — proceeding without hash verification. "
-            "Older release without hash in body."
+    # We hand this file to ShellExecute with verb="runas" — it gets full
+    # admin via UAC. A missing hash is therefore not "pre-CI legacy and
+    # acceptable", it is "we are about to elevate an unverified binary".
+    # Refuse instead of warning. CI now always emits the hash, so the only
+    # way this fires is a tampered release body or a release that predates
+    # v0.3.14 (none of which we want to auto-update from).
+    if not expected_sha256:
+        try:
+            target.unlink()
+        except OSError:
+            pass
+        raise ValueError(
+            "Release is missing the SHA-256 line in its body — refusing to "
+            "auto-install an unverified installer. Download manually from "
+            "the Releases page if you trust this release."
         )
+    if actual.lower() != expected_sha256.lower():
+        try:
+            target.unlink()
+        except OSError:
+            pass
+        raise ValueError(
+            f"Installer hash mismatch — expected {expected_sha256}, "
+            f"got {actual}. File deleted, update aborted."
+        )
+    _log.info("Update hash verified ✓")
     return target
 
 

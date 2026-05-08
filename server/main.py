@@ -124,6 +124,7 @@ async def health():
 async def transcribe(
     file: UploadFile = File(...),
     language: str = Form("de"),
+    prompt: str = Form(""),
     x_api_key: str | None = Header(default=None),
 ):
     caller = _resolve_caller(x_api_key)
@@ -141,19 +142,27 @@ async def transcribe(
     if audio.size == 0:
         raise HTTPException(status_code=400, detail="could not decode audio")
 
+    # Whisper uses initial_prompt to bias toward custom vocab (names,
+    # acronyms, jargon). Cap to 1 KiB so a malicious caller can't smuggle
+    # a 10MB string into the encoder.
+    initial_prompt = (prompt or "").strip()[:1024] or None
+
     t0 = time.time()
     model = _load_model()
     segments, info = model.transcribe(
         audio,
         language=language or None,
+        initial_prompt=initial_prompt,
         beam_size=5,
         vad_filter=True,
     )
     text = " ".join(seg.text.strip() for seg in segments).strip()
     elapsed = time.time() - t0
+    # Don't log transcript content — these are user dictations and may
+    # contain passwords / PII / IP. Size + duration is enough for ops.
     print(
         f"[transcribe] {len(payload) / 1024:.1f}KB · {info.duration:.1f}s · "
-        f"{elapsed:.2f}s · '{text[:60]}'",
+        f"{elapsed:.2f}s · {len(text)}ch",
         flush=True,
     )
 
@@ -213,14 +222,25 @@ class SignUpRequest(BaseModel):
 
 @app.post("/v1/account/sign-up")
 async def account_sign_up(req: SignUpRequest):
-    """Self-service onboarding — return an API key for an email.
+    """Self-service onboarding — issue an API key for a NEW email.
 
-    Idempotent: existing email returns the existing api_key (no need for a
-    separate "recover" endpoint). The desktop app uses this both on first
-    install and on re-login.
+    The endpoint is intentionally NOT idempotent. Returning the existing
+    api_key for a known email would let anyone with the email address
+    impersonate the account (mailbox-only "auth"). For lost-key recovery
+    users must contact support; an email-verified recovery flow is on
+    the roadmap.
     """
     try:
-        acct = _accounts.get_or_create(str(req.email))
+        acct = _accounts.create_account(str(req.email))
+    except _accounts.EmailAlreadyRegistered:
+        # Don't echo the api_key. 409 + a hint to use the recovery channel.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "email already registered — to recover a lost API key, "
+                "contact support@subunit.ai"
+            ),
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return JSONResponse(
@@ -228,7 +248,7 @@ async def account_sign_up(req: SignUpRequest):
             "email": acct["email"],
             "api_key": acct["api_key"],
             "plan": acct["plan"],
-            "is_new": acct["is_new"],
+            "is_new": True,
         }
     )
 

@@ -27,6 +27,10 @@ class SubunitTranscriber:
     def __init__(self, endpoint: str, api_key: str = "") -> None:
         self.endpoint = endpoint
         self.api_key = api_key
+        # Set by base.get_transcriber() from the user's vocab list. Mirrors
+        # the cloud + local providers so Whisper biases toward custom names
+        # / jargon on the Subunit backend too.
+        self.initial_prompt: str = ""
 
     def transcribe(self, audio: np.ndarray, language: str = "de") -> str:
         if audio.size == 0:
@@ -34,6 +38,8 @@ class SubunitTranscriber:
         wav_bytes = _audio_to_wav_bytes(audio)
         files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
         data = {"language": language}
+        if self.initial_prompt:
+            data["prompt"] = self.initial_prompt
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
             r = requests.post(
