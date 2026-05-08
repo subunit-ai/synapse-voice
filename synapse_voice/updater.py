@@ -1,14 +1,19 @@
 """Auto-update checker — polls GitHub Releases for a newer version.
 
 Network call is best-effort and timeouts quickly so app startup isn't
-delayed if GitHub is slow. Result is surfaced to the user via a small
-modal dialog ("Update v0.x.y → v0.z.w available — Open release page?").
+delayed if GitHub is slow. v0.3.4: result drives an in-app download +
+installer launch instead of just opening the release page in a browser.
 """
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass
-from typing import Optional
+from pathlib import Path
+from typing import Callable, Optional
 
 import requests
 
@@ -27,6 +32,11 @@ class UpdateInfo:
     release_url: str
     body: str
     available: bool
+    # v0.3.4: direct download URL for the platform-appropriate installer.
+    # None if the release didn't ship one for our platform — caller falls
+    # back to opening the release page.
+    installer_url: Optional[str] = None
+    installer_name: Optional[str] = None
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
@@ -52,6 +62,7 @@ def check(timeout: float = 5.0) -> Optional[UpdateInfo]:
         tag = data.get("tag_name") or ""
         url = data.get("html_url") or ""
         body = (data.get("body") or "").strip()
+        assets = data.get("assets") or []
     except requests.RequestException as e:
         _log.debug("Update check failed: %s", e)
         return None
@@ -66,10 +77,93 @@ def check(timeout: float = 5.0) -> Optional[UpdateInfo]:
     available = latest > current
     if available:
         _log.info("Update available: %s → %s", __version__, tag)
+    installer_url, installer_name = _pick_installer_asset(assets)
     return UpdateInfo(
         current=__version__,
         latest=tag,
         release_url=url,
         body=body,
         available=available,
+        installer_url=installer_url,
+        installer_name=installer_name,
     )
+
+
+def _pick_installer_asset(assets: list) -> tuple[Optional[str], Optional[str]]:
+    """Pick the right release asset for the current platform.
+
+    Windows: SynapseVoice-Setup-X.Y.Z.exe (NSIS installer — handles the
+        running-process kill + reinstall + relaunch).
+    Linux:   SynapseVoice-x86_64.AppImage (self-contained binary; we
+        replace the running file in-place + re-exec).
+    """
+    is_win = sys.platform == "win32"
+    for a in assets:
+        name = (a.get("name") or "").strip()
+        url = a.get("browser_download_url") or ""
+        lower = name.lower()
+        if is_win and lower.endswith(".exe") and "setup" in lower:
+            return url, name
+        if (not is_win) and lower.endswith(".appimage"):
+            return url, name
+    return None, None
+
+
+def download_installer(
+    url: str,
+    target_dir: Optional[Path] = None,
+    progress_cb: Optional[Callable[[int, int], None]] = None,
+    timeout: float = 30.0,
+) -> Path:
+    """Stream-download the installer to disk. Calls progress_cb(bytes, total)
+    on every chunk if total size is known. Returns the saved path."""
+    if target_dir is None:
+        target_dir = Path(tempfile.gettempdir())
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / (Path(url).name or "synapse-voice-update.bin")
+
+    _log.info("Downloading update from %s → %s", url, target)
+    with requests.get(url, stream=True, timeout=timeout) as r:
+        r.raise_for_status()
+        total = int(r.headers.get("content-length") or 0)
+        downloaded = 0
+        with target.open("wb") as f:
+            for chunk in r.iter_content(chunk_size=128 * 1024):
+                if not chunk:
+                    continue
+                f.write(chunk)
+                downloaded += len(chunk)
+                if progress_cb and total:
+                    try:
+                        progress_cb(downloaded, total)
+                    except Exception:
+                        pass  # progress UI errors mustn't kill the download
+    return target
+
+
+def launch_installer_and_quit(installer: Path) -> None:
+    """Spawn the installer detached so it survives our exit, then signal
+    the caller to quit. The NSIS installer auto-kills any running
+    synapse-voice.exe and re-launches it after install. AppImage path
+    just chmod+x and exec."""
+    if sys.platform == "win32":
+        # CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS so installer survives
+        # us quitting. NSIS handles taskkill + replace + finish-page-run.
+        DETACHED_PROCESS = 0x00000008
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        _log.info("Launching installer: %s", installer)
+        subprocess.Popen(
+            [str(installer)],
+            close_fds=True,
+            creationflags=flags,
+        )
+        return
+    # Linux: AppImage replace-and-restart. Caller is responsible for
+    # putting the new file into place — we just chmod + spawn.
+    try:
+        os.chmod(installer, 0o755)
+    except Exception:
+        pass
+    _log.info("Launching AppImage: %s", installer)
+    subprocess.Popen([str(installer)], close_fds=True)

@@ -410,18 +410,121 @@ class SynapseVoiceApp(QObject):
         box = QMessageBox()
         box.setIcon(QMessageBox.Icon.Information)
         box.setWindowTitle("Synapse Voice — Update available")
-        box.setText(
-            f"A new version is available:\n\n"
-            f"  Current: v{info.current}\n"
-            f"  Latest:  {info.latest}\n\n"
-            f"Open the release page to download?"
+        # If we have a direct installer URL we offer a one-click install,
+        # otherwise we fall back to the release page (e.g. unsupported
+        # platform or asset naming changed).
+        if info.installer_url:
+            box.setText(
+                f"A new version is available:\n\n"
+                f"  Current: v{info.current}\n"
+                f"  Latest:  {info.latest}\n\n"
+                f"Download and install now? The app will close + reopen."
+            )
+            box.setStandardButtons(
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            box.setDefaultButton(QMessageBox.StandardButton.Yes)
+            if box.exec() == QMessageBox.StandardButton.Yes:
+                self._download_and_install(info)
+        else:
+            box.setText(
+                f"A new version is available:\n\n"
+                f"  Current: v{info.current}\n"
+                f"  Latest:  {info.latest}\n\n"
+                f"Open the release page to download?"
+            )
+            box.setStandardButtons(
+                QMessageBox.StandardButton.Open
+                | QMessageBox.StandardButton.Ignore
+            )
+            if box.exec() == QMessageBox.StandardButton.Open:
+                QDesktopServices.openUrl(QUrl(info.release_url))
+
+    def _download_and_install(self, info) -> None:
+        """Download the platform installer in a worker thread with a
+        progress dialog, then spawn the installer + quit ourselves so it
+        can replace files."""
+        from pathlib import Path
+
+        from PyQt6.QtCore import Qt, QThread, pyqtSignal
+        from PyQt6.QtWidgets import QMessageBox, QProgressDialog
+
+        from . import updater
+
+        progress = QProgressDialog(
+            f"Downloading {info.installer_name}…",
+            "Cancel",
+            0,
+            100,
         )
-        box.setStandardButtons(
-            QMessageBox.StandardButton.Open
-            | QMessageBox.StandardButton.Ignore
-        )
-        if box.exec() == QMessageBox.StandardButton.Open:
-            QDesktopServices.openUrl(QUrl(info.release_url))
+        progress.setWindowTitle("Synapse Voice — Updating")
+        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+
+        class _Worker(QThread):
+            progress_changed = pyqtSignal(int)
+            finished_with_path = pyqtSignal(str)
+            failed = pyqtSignal(str)
+
+            def __init__(self, url: str) -> None:
+                super().__init__()
+                self.url = url
+                self._cancelled = False
+
+            def cancel(self) -> None:
+                self._cancelled = True
+
+            def run(self) -> None:
+                try:
+                    def cb(d: int, t: int) -> None:
+                        if self._cancelled:
+                            raise RuntimeError("cancelled")
+                        if t:
+                            self.progress_changed.emit(int(100 * d / t))
+                    target = updater.download_installer(self.url, progress_cb=cb)
+                    self.finished_with_path.emit(str(target))
+                except Exception as e:
+                    if not self._cancelled:
+                        self.failed.emit(str(e))
+
+        worker = _Worker(info.installer_url)
+        # Keep ref so it isn't GC'd mid-flight.
+        self._update_worker = worker
+
+        worker.progress_changed.connect(progress.setValue)
+
+        def on_ok(p: str) -> None:
+            progress.close()
+            try:
+                updater.launch_installer_and_quit(Path(p))
+            except Exception as e:
+                _log.exception("launch_installer failed")
+                QMessageBox.warning(
+                    None,
+                    "Synapse Voice — Update failed",
+                    f"Could not launch the installer:\n\n{e}",
+                )
+                return
+            # Give the installer a beat to actually start before we exit
+            # — otherwise some shells reap it as our child.
+            QApplication.instance().processEvents()
+            self.quit()
+
+        def on_fail(err: str) -> None:
+            progress.close()
+            _log.error("Update download failed: %s", err)
+            QMessageBox.warning(
+                None,
+                "Synapse Voice — Update failed",
+                f"Could not download the update:\n\n{err}\n\n"
+                f"You can grab it manually from:\n{info.release_url}",
+            )
+
+        worker.finished_with_path.connect(on_ok)
+        worker.failed.connect(on_fail)
+        progress.canceled.connect(worker.cancel)
+        worker.start()
 
     def quit(self) -> None:
         self.hotkey.stop()
