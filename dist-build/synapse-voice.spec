@@ -24,6 +24,16 @@ extra_datas += collect_data_files("tokenizers")
 # Brand assets — the icons/ folder must ship with the bundle so the
 # BrandLogo widget + tray icon can find subunit-logo.png at runtime.
 extra_datas.append((str(ROOT / "icons" / "subunit-logo.png"), "icons"))
+# Sound effects — synapse_voice/sounds/{start,done}.wav. PyInstaller's
+# static analysis doesn't pick up arbitrary data dirs inside packages,
+# so list them explicitly. Destination matches sounds._candidates() so
+# the runtime resolver finds them via sys._MEIPASS.
+extra_datas.append(
+    (str(ROOT / "synapse_voice" / "sounds" / "start.wav"), "synapse_voice/sounds")
+)
+extra_datas.append(
+    (str(ROOT / "synapse_voice" / "sounds" / "done.wav"), "synapse_voice/sounds")
+)
 # ctranslate2 + onnxruntime ship native shared libs that aren't picked up unless
 # we explicitly collect them.
 extra_binaries = []
@@ -38,6 +48,7 @@ a = Analysis(
     hiddenimports=[
         "synapse_voice",
         "synapse_voice.account",
+        "synapse_voice.sounds",
         "synapse_voice.autostart",
         "synapse_voice.cleanup_client",
         "synapse_voice.hardware",

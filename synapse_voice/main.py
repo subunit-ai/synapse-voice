@@ -252,6 +252,9 @@ class SynapseVoiceApp(QObject):
             self.bubble.show_state("recording", f"● Rec → {title[:32]}")
         if self.orb is not None:
             self.orb.show_state("recording")
+        if self.config.sound_enabled:
+            from . import sounds
+            sounds.play("start", volume=self.config.sound_volume)
 
     def _stop_recording(self) -> None:
         audio = self.recorder.stop()
@@ -337,6 +340,9 @@ class SynapseVoiceApp(QObject):
             mode = "clipboard"
 
         self._record_history(text, mode)
+        if self.config.sound_enabled and mode in ("pasted", "clipboard"):
+            from . import sounds
+            sounds.play("done", volume=self.config.sound_volume)
         title = self.target.title if self.target else ""
         if mode == "pasted":
             if self.orb is None:

@@ -288,6 +288,14 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self.row_show_bubble)
 
+        self.row_sound = _ToggleRow(
+            "Sound feedback on hotkey",
+            "Soft tap when recording starts, gentle pop when transcription "
+            "lands. Volume tuned to be unobtrusive.",
+            self.config.sound_enabled,
+        )
+        layout.addWidget(self.row_sound)
+
         self.row_orb_overlay = _ToggleRow(
             "Use Orb overlay (v0.4 preview)",
             "Persistent floating glass-spheres widget with hover-picker for "
@@ -877,6 +885,7 @@ class SettingsDialog(QDialog):
         config.autopaste = self.row_autopaste.is_on()
         config.target_lock = self.row_target_lock.is_on()
         config.show_bubble = self.row_show_bubble.is_on()
+        config.sound_enabled = self.row_sound.is_on()
         # The Orb toggle is mirrored on both General + Overlay tabs.
         # The Overlay tab is the "more complete" surface, so let it win
         # if the user touched it; otherwise fall back to the General tab.

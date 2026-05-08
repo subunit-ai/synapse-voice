@@ -83,6 +83,10 @@ class Config:
     # finishes (or skips) the 4-step setup.
     has_seen_onboarding: bool = False
 
+    # v0.4: Subtle UI sounds — start ping on record, pop on done.
+    sound_enabled: bool = True
+    sound_volume: float = 0.6  # 0.0..1.0
+
     # v0.3.9: Lexikon — custom-vocab to bias Whisper toward correct
     # spellings of brand names / technical terms / proper nouns. Each
     # entry: {"sounds_like": "z.B. wie es klingt", "write_as": "Korrekt"}.
