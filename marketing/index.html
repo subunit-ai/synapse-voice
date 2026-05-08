@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Synapse Voice — Hotkey-Diktat fuer alle deine Apps</title>
+<meta name="description" content="DSGVO-konformes Speech-to-Text. Lokal-first, EU-Server in Frankfurt, Open Source. Whisper-Quality auf Tastendruck." />
+<link rel="icon" type="image/png" href="assets/logo.png" />
+<link rel="stylesheet" href="css/style.css" />
+<meta property="og:title" content="Synapse Voice — DSGVO-Diktat fuer den Desktop" />
+<meta property="og:description" content="Hotkey druecken, sprechen, paste. Lokal oder EU-Cloud. Open Source." />
+<meta property="og:type" content="website" />
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- NAV                                                                  -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<nav class="nav">
+  <div class="container nav-inner">
+    <a href="#" class="nav-brand">
+      <img src="assets/logo.png" alt="" class="nav-logo" />
+      <span>Synapse Voice</span>
+    </a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#privacy">Privacy</a>
+      <a href="#pricing">Pricing</a>
+      <a href="https://github.com/subunit-ai/synapse-voice" target="_blank" rel="noopener">GitHub →</a>
+    </div>
+    <a href="#download" class="btn btn-primary btn-sm">Download</a>
+  </div>
+</nav>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- HERO                                                                 -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<section class="hero">
+  <div class="container hero-inner">
+    <div class="hero-text">
+      <span class="badge">
+        <span class="badge-dot"></span>
+        DSGVO-konform · Made in Europe
+      </span>
+      <h1>
+        Diktiere ueberall.<br />
+        <span class="text-cyan">Deine Daten bleiben hier.</span>
+      </h1>
+      <p class="hero-sub">
+        Hotkey druecken, sprechen, paste — direkt in jede App.
+        Lokal-first auf deinem Rechner oder ueber unseren EU-Server in Frankfurt.
+        Whisper-Qualitaet, kein US-Cloud-Risiko, vollstaendig Open Source.
+      </p>
+      <div class="hero-cta">
+        <a href="#download" class="btn btn-primary">Kostenlos downloaden</a>
+        <a href="#how-it-works" class="btn btn-ghost">So funktioniert's</a>
+      </div>
+      <div class="hero-meta">
+        <span>✓ Windows · Linux</span>
+        <span>✓ Open Source</span>
+        <span>✓ Auto-Update</span>
+      </div>
+    </div>
+    <div class="hero-visual">
+      <canvas id="globe-canvas" width="520" height="520" aria-hidden="true"></canvas>
+      <div class="hero-orb">
+        <div class="orb-pulse"></div>
+        <div class="orb-core"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- PRIVACY HERO                                                         -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<section class="privacy-section" id="privacy">
+  <div class="container">
+    <span class="kicker">EU-Datenschutz</span>
+    <h2>
+      Deine Daten bleiben in <span class="text-cyan">Europa</span>
+    </h2>
+    <p class="section-sub">
+      Diktiere ueberall — deine Daten gehen nirgendwohin.
+      Synapse Voice verarbeitet alle Sprach- und Textdaten ausschliesslich
+      auf europaeischen Servern oder direkt lokal auf deinem Rechner.
+    </p>
+
+    <div class="privacy-cards">
+      <div class="privacy-card">
+        <div class="card-icon">🛡️</div>
+        <h3>Kein Datentransfer ausserhalb der EU</h3>
+        <p>Alle Daten werden ausschliesslich auf europaeischen Servern verarbeitet.</p>
+      </div>
+      <div class="privacy-card">
+        <div class="card-icon">📋</div>
+        <h3>DSGVO-konform</h3>
+        <p>Vollstaendige Einhaltung der EU-Datenschutzgrundverordnung.</p>
+      </div>
+      <div class="privacy-card">
+        <div class="card-icon">🔒</div>
+        <h3>Ende-zu-Ende verschluesselt</h3>
+        <p>Deine Audiodaten sind waehrend der gesamten Verarbeitung geschuetzt.</p>
+      </div>
+      <div class="privacy-card">
+        <div class="card-icon">📍</div>
+        <h3>Server-Standort Frankfurt</h3>
+        <p>Entwickelt und betrieben in Deutschland. Cloudflare-Tunnel zu Subunit.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- MODE TOGGLE DEMO                                                     -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<section class="mode-demo" id="how-it-works">
+  <div class="container">
+    <span class="kicker">100% Privatsphaere oder maximale Geschwindigkeit</span>
+    <h2>Du entscheidest, <span class="text-cyan">wo's verarbeitet wird</span></h2>
+
+    <div class="toggle-card">
+      <div class="toggle-header">
+        <div>
+          <strong id="toggle-title">Local Mode</strong>
+          <p id="toggle-sub">Whisper laeuft komplett auf deiner Maschine</p>
+        </div>
+        <div class="toggle-switch" role="switch" tabindex="0" aria-checked="true">
+          <div class="toggle-thumb"></div>
+        </div>
+      </div>
+
+      <div class="flow" id="flow-local">
+        <div class="flow-node">
+          <div class="flow-icon">🎤</div>
+          <span>Mikrofon</span>
+        </div>
+        <div class="flow-line"></div>
+        <div class="flow-node flow-node-active">
+          <div class="flow-icon">🔒</div>
+          <span>Lokale GPU/CPU</span>
+          <small>Whisper / faster-whisper</small>
+        </div>
+        <div class="flow-line"></div>
+        <div class="flow-node">
+          <div class="flow-icon">📝</div>
+          <span>Direkt in deine App</span>
+        </div>
+      </div>
+
+      <div class="flow flow-hidden" id="flow-cloud">
+        <div class="flow-node">
+          <div class="flow-icon">🎤</div>
+          <span>Mikrofon</span>
+        </div>
+        <div class="flow-line"></div>
+        <div class="flow-node">
+          <div class="flow-icon">🇪🇺</div>
+          <span>EU-STT-Server</span>
+          <small>Frankfurt</small>
+        </div>
+        <div class="flow-line"></div>
+        <div class="flow-node">
+          <div class="flow-icon">🧠</div>
+          <span>EU-LLM-Server</span>
+          <small>AI-Cleanup (optional)</small>
+        </div>
+        <div class="flow-line"></div>
+        <div class="flow-node">
+          <div class="flow-icon">📝</div>
+          <span>Deine App</span>
+        </div>
+      </div>
+
+      <p class="toggle-footnote" id="toggle-footnote">
+        🔒 Audio verlaesst dein Geraet nicht — perfekt fuer sensible Inhalte
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- FEATURES                                                             -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<section class="features" id="features">
+  <div class="container">
+    <span class="kicker">Built for daily dictation</span>
+    <h2>Alles drin. <span class="text-cyan">Nichts versteckt.</span></h2>
+
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="feature-num">01</div>
+        <h3>Hotkey-Diktat</h3>
+        <p>Strg + Space druecken, sprechen, loslassen. Text landet sofort in der App, in der dein Cursor war. Keine Window-Switches.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">02</div>
+        <h3>99 Sprachen</h3>
+        <p>Whisper-Stack: Deutsch, English, Francais, ... — alle 99 Sprachen die OpenAI Whisper unterstuetzt, mit suchbarer Auswahl.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">03</div>
+        <h3>AI-Cleanup</h3>
+        <p>Optional: Aehs / Ums entfernen, Satzzeichen einsetzen, in Business-Tonalitaet umschreiben. Per Toggle pro Aufnahme.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">04</div>
+        <h3>Lexikon</h3>
+        <p>Eigennamen + Marken die Whisper falsch versteht? Trag sie ein, wir biasen das Modell auf die richtige Schreibung.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">05</div>
+        <h3>Auto-Update</h3>
+        <p>Neue Versionen werden automatisch geladen + installiert. SHA-256-verifiziert. Du klickst einmal "OK", Rest ist Auto-Pilot.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">06</div>
+        <h3>Open Source</h3>
+        <p>Source auf GitHub. Pull-Requests willkommen. Kein Vendor-Lock-in. Deine Daten + dein Code, voll inspizierbar.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- PRICING                                                              -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<section class="pricing" id="pricing">
+  <div class="container">
+    <span class="kicker">Einfach. Fair. Transparent.</span>
+    <h2>Pricing</h2>
+
+    <div class="pricing-grid">
+      <div class="price-card">
+        <div class="price-tag">Frei</div>
+        <h3>Local-Mode</h3>
+        <div class="price">€0<small>/forever</small></div>
+        <ul>
+          <li>✓ Unbegrenzte Aufnahmen</li>
+          <li>✓ 99 Sprachen</li>
+          <li>✓ Whisper-Modelle base/small/medium/large</li>
+          <li>✓ Auto-Update + Open Source</li>
+          <li class="dim">— Laeuft komplett auf deiner Maschine</li>
+        </ul>
+        <a href="#download" class="btn btn-ghost btn-block">Download</a>
+      </div>
+
+      <div class="price-card price-card-featured">
+        <div class="price-tag">Recommended</div>
+        <h3>Cloud-Mode</h3>
+        <div class="price">€9<small>/Monat</small></div>
+        <ul>
+          <li>✓ Alles aus Local-Mode</li>
+          <li>✓ Subunit EU-Server (Frankfurt)</li>
+          <li>✓ Whisper-Large-v3 immer verfuegbar</li>
+          <li>✓ AI-Cleanup inkludiert</li>
+          <li>✓ Schneller als lokale CPU-Modelle</li>
+        </ul>
+        <a href="#download" class="btn btn-primary btn-block">Kostenlos starten</a>
+        <small class="price-note">14 Tage kostenlos · keine Kreditkarte</small>
+      </div>
+
+      <div class="price-card">
+        <div class="price-tag">Custom</div>
+        <h3>Bring your own</h3>
+        <div class="price">€0<small>/api-key</small></div>
+        <ul>
+          <li>✓ OpenAI Whisper API</li>
+          <li>✓ Groq (10x realtime, free tier)</li>
+          <li>✓ Custom OpenAI-compat endpoint</li>
+          <li>✓ Du zahlst direkt deinen Provider</li>
+          <li class="dim">— Maximaler Kontrolle, kein Subunit-Account</li>
+        </ul>
+        <a href="#download" class="btn btn-ghost btn-block">Download</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- DOWNLOAD                                                             -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<section class="download" id="download">
+  <div class="container">
+    <h2>Loslegen.</h2>
+    <p class="section-sub">Single-Click-Installer fuer Windows, AppImage fuer Linux.</p>
+    <div class="download-grid">
+      <a href="#" class="dl-card" id="dl-windows" data-asset="setup">
+        <div class="dl-icon">🪟</div>
+        <strong>Windows</strong>
+        <small>Setup .exe · ~80 MB</small>
+        <span class="dl-version" id="dl-version-win">Lade neueste Version…</span>
+      </a>
+      <a href="#" class="dl-card" id="dl-linux" data-asset="appimage">
+        <div class="dl-icon">🐧</div>
+        <strong>Linux</strong>
+        <small>AppImage · ~190 MB</small>
+        <span class="dl-version" id="dl-version-linux">Lade neueste Version…</span>
+      </a>
+      <a href="https://github.com/subunit-ai/synapse-voice" target="_blank" rel="noopener" class="dl-card">
+        <div class="dl-icon">⌨️</div>
+        <strong>Source</strong>
+        <small>Build it yourself</small>
+        <span class="dl-version">github.com →</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- FOOTER                                                               -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<footer class="footer">
+  <div class="container footer-inner">
+    <div>
+      <strong>Synapse Voice</strong> — by <a href="https://subunit.ai" target="_blank" rel="noopener">subunit</a>
+      <p class="dim">Made in Europe · DSGVO-konform · Open Source</p>
+    </div>
+    <div class="footer-links">
+      <a href="https://github.com/subunit-ai/synapse-voice" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://subunit.ai" target="_blank" rel="noopener">subunit.ai</a>
+      <a href="mailto:hello@subunit.ai">Kontakt</a>
+    </div>
+  </div>
+</footer>
+
+<script type="module" src="js/main.js"></script>
+<script type="module" src="js/globe.js"></script>
+</body>
+</html>

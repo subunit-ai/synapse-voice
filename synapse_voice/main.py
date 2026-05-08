@@ -340,9 +340,10 @@ class SynapseVoiceApp(QObject):
             mode = "clipboard"
 
         self._record_history(text, mode)
-        if self.config.sound_enabled and mode in ("pasted", "clipboard"):
-            from . import sounds
-            sounds.play("done", volume=self.config.sound_volume)
+        # TJ-feedback v0.3.17: sound ONLY on hotkey-press (record start),
+        # not on paste-done. The "done" event is already conveyed by the
+        # text appearing in the target window — a second sound felt
+        # noisy on rapid back-to-back dictations.
         title = self.target.title if self.target else ""
         if mode == "pasted":
             if self.orb is None:
