@@ -55,11 +55,24 @@ class Recorder:
     def stop(self) -> np.ndarray:
         if not self._recording:
             return np.zeros(0, dtype=np.float32)
-        if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
+        # try/finally so a failed stream-close doesn't leave _recording stuck
+        # at True (otherwise the next hotkey press toggles us into a "stop"
+        # path that immediately yields zero audio → user sees a flash bubble
+        # and nothing transcribes).
+        try:
+            if self._stream is not None:
+                try:
+                    self._stream.stop()
+                except Exception as e:
+                    print(f"[recorder] stream.stop() failed: {e}", flush=True)
+                try:
+                    self._stream.close()
+                except Exception as e:
+                    print(f"[recorder] stream.close() failed: {e}", flush=True)
+        finally:
             self._stream = None
-        self._recording = False
+            self._recording = False
+
         with self._lock:
             if not self._chunks:
                 return np.zeros(0, dtype=np.float32)

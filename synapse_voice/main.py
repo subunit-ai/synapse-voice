@@ -74,6 +74,7 @@ class SynapseVoiceApp(QObject):
         self.target: WindowTarget | None = None
         self._active_threads: list[tuple[QThread, "TranscribeWorker"]] = []
         self._last_audio_seconds: float = 0.0
+        self._last_toggle_at: float = 0.0
 
         self.bubble = Bubble()
         self.bubble.set_level_provider(lambda: self.recorder.level)
@@ -117,12 +118,32 @@ class SynapseVoiceApp(QObject):
             self._prewarm_thread.start()
 
     def toggle_record(self) -> None:
+        # Debounce — pynput occasionally double-fires a hotkey on Windows when
+        # the user releases the modifier slightly before the trigger key, and
+        # any double-toggle within 250ms is almost certainly noise rather
+        # than intent.
+        import time as _time
+
+        now = _time.monotonic()
+        if now - self._last_toggle_at < 0.25:
+            return
+        self._last_toggle_at = now
+
         if not self.recorder.is_recording:
             self._start_recording()
         else:
             self._stop_recording()
 
     def _start_recording(self) -> None:
+        # Pre-flight: if the selected mode needs credentials we don't have,
+        # prompt the user to fill them in instead of recording 30s of audio
+        # and only then surfacing "API key missing".
+        if self.config.mode == "openrouter" and not self.config.openrouter_api_key:
+            self._prompt_for_credentials(
+                "OpenRouter mode needs an API key. Open Settings to add it?"
+            )
+            return
+
         self.target = capture_active_window() if self.config.target_lock else None
         try:
             self.recorder.start()
@@ -203,6 +224,22 @@ class SynapseVoiceApp(QObject):
         QTimer.singleShot(2500, lambda: (self.tray.set_state("idle", "idle"), self.main_window.set_status("idle")))
 
     def _on_transcribe_failed(self, message: str) -> None:
+        # Auth / credentials problems are user-fixable in Settings — surface a
+        # dialog instead of just a tray flash that the user can't act on.
+        lower = message.lower()
+        is_auth = any(
+            kw in lower
+            for kw in ("api key", "401", "invalid api", "unauthor", "forbidden", "403")
+        )
+        if is_auth:
+            self.tray.set_state("idle", "idle")
+            self._safe_status("idle")
+            self.bubble.fade_out()
+            self._prompt_for_credentials(
+                f"{self.config.mode.title()} authentication failed.\n\n"
+                f"{message[:200]}\n\nOpen Settings to update credentials?"
+            )
+            return
         self._show_error(message)
 
     def _show_error(self, message: str) -> None:
@@ -244,6 +281,19 @@ class SynapseVoiceApp(QObject):
                 f"Updated. Hotkey: {self.config.hotkey} · Mode: {self.config.mode}",
                 msecs=2500,
             )
+
+    def _prompt_for_credentials(self, message: str) -> None:
+        from PyQt6.QtWidgets import QMessageBox
+
+        box = QMessageBox()
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("Synapse Voice")
+        box.setText(message)
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Open | QMessageBox.StandardButton.Cancel
+        )
+        if box.exec() == QMessageBox.StandardButton.Open:
+            self.open_settings()
 
     def _safe_status(self, label: str, color: str = None) -> None:
         try:

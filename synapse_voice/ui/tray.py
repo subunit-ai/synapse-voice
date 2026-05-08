@@ -7,6 +7,8 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QActionGroup, QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
 
+from .. import __version__
+
 
 def _make_icon(color: QColor, size: int = 22) -> QIcon:
     pix = QPixmap(size, size)
@@ -50,6 +52,11 @@ class Tray(QSystemTrayIcon):
 
         # Hold menu as instance attribute — without it, Windows can GC the menu after __init__.
         self._menu = QMenu()
+
+        self._version_action = QAction(f"Synapse Voice  v{__version__}", self._menu)
+        self._version_action.setEnabled(False)
+        self._menu.addAction(self._version_action)
+        self._menu.addSeparator()
 
         self._open_window_action = QAction("Open Synapse Voice", self._menu)
         self._open_window_action.triggered.connect(lambda: on_open_window())
