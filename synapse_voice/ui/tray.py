@@ -47,43 +47,56 @@ class Tray(QSystemTrayIcon):
         self.setIcon(self._icons["idle"])
         self.setToolTip("Synapse Voice — idle")
 
-        menu = QMenu()
-        self._record_action = QAction("Toggle Record", menu)
+        # Hold menu as instance attribute — without it, Windows can GC the menu after __init__.
+        self._menu = QMenu()
+        self._record_action = QAction("Toggle Record", self._menu)
         self._record_action.triggered.connect(lambda: on_toggle_record())
-        menu.addAction(self._record_action)
+        self._menu.addAction(self._record_action)
 
-        menu.addSeparator()
+        self._menu.addSeparator()
 
-        mode_menu = menu.addMenu("Mode")
-        self._mode_group = QActionGroup(menu)
+        self._mode_menu = self._menu.addMenu("Mode")
+        self._mode_group = QActionGroup(self._menu)
         self._mode_group.setExclusive(True)
         for mode_id, label in (
             ("local", "Local (faster-whisper)"),
             ("openrouter", "Cloud — OpenRouter"),
             ("subunit", "Cloud — Subunit (DSGVO, Phase 3)"),
         ):
-            act = QAction(label, mode_menu, checkable=True)
+            act = QAction(label, self._mode_menu, checkable=True)
             act.setData(mode_id)
             act.setChecked(mode_id == current_mode)
             act.triggered.connect(lambda _checked, m=mode_id: on_change_mode(m))
             self._mode_group.addAction(act)
-            mode_menu.addAction(act)
+            self._mode_menu.addAction(act)
 
-        menu.addSeparator()
-        history_action = QAction("History…", menu)
-        history_action.triggered.connect(lambda: on_open_history())
-        menu.addAction(history_action)
+        self._menu.addSeparator()
+        self._history_action = QAction("History…", self._menu)
+        self._history_action.triggered.connect(lambda: on_open_history())
+        self._menu.addAction(self._history_action)
 
-        settings_action = QAction("Settings…", menu)
-        settings_action.triggered.connect(lambda: on_open_settings())
-        menu.addAction(settings_action)
+        self._settings_action = QAction("Settings…", self._menu)
+        self._settings_action.triggered.connect(lambda: on_open_settings())
+        self._menu.addAction(self._settings_action)
 
-        menu.addSeparator()
-        quit_action = QAction("Quit", menu)
-        quit_action.triggered.connect(lambda: on_quit())
-        menu.addAction(quit_action)
+        self._menu.addSeparator()
+        self._quit_action = QAction("Quit", self._menu)
+        self._quit_action.triggered.connect(lambda: on_quit())
+        self._menu.addAction(self._quit_action)
 
-        self.setContextMenu(menu)
+        self.setContextMenu(self._menu)
+
+        # Windows-friendly: left-click on the tray icon also pops the menu.
+        # On Linux/macOS the right-click default already works.
+        self.activated.connect(self._on_activated)
+
+    def _on_activated(self, reason: "QSystemTrayIcon.ActivationReason") -> None:
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+            QSystemTrayIcon.ActivationReason.MiddleClick,
+        ):
+            self._menu.popup(self.geometry().center())
 
     def set_state(self, state: str, tooltip: str | None = None) -> None:
         if state in self._icons:

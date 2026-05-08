@@ -243,25 +243,79 @@ class SynapseVoiceApp(QObject):
         QApplication.instance().quit()
 
 
+def _setup_logging() -> "Path":
+    """File logger so silent crashes on Windows GUI builds are diagnosable."""
+    from pathlib import Path
+
+    if sys.platform == "win32":
+        log_dir = Path.home() / "AppData" / "Local" / "synapse-voice" / "logs"
+    else:
+        log_dir = Path.home() / ".local" / "share" / "synapse-voice" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "synapse-voice.log"
+
+    def _excepthook(exctype, value, tb):
+        ts = datetime.now(timezone.utc).isoformat()
+        try:
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"\n=== {ts} ===\n")
+                traceback.print_exception(exctype, value, tb, file=f)
+        except Exception:
+            pass
+        traceback.print_exception(exctype, value, tb)
+
+    sys.excepthook = _excepthook
+    try:
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(
+                f"\n[{datetime.now(timezone.utc).isoformat()}] "
+                f"synapse-voice {__version__} starting on {sys.platform}\n"
+            )
+    except Exception:
+        pass
+    return log_file
+
+
 def main() -> int:
-    sys.excepthook = lambda *args: traceback.print_exception(*args)
-    app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(False)
-    app.setApplicationName("Synapse Voice")
-    app.setApplicationVersion(__version__)
+    log_file = _setup_logging()
 
-    if not Tray.isSystemTrayAvailable():
-        QMessageBox.critical(
-            None,
-            "Synapse Voice",
-            "System tray is not available on this desktop. Aborting.",
-        )
-        return 1
+    try:
+        app = QApplication(sys.argv)
+        app.setQuitOnLastWindowClosed(False)
+        app.setApplicationName("Synapse Voice")
+        app.setApplicationVersion(__version__)
 
-    signal.signal(signal.SIGINT, signal.SIG_DFL)
+        if not Tray.isSystemTrayAvailable():
+            QMessageBox.critical(
+                None,
+                "Synapse Voice",
+                "System tray is not available on this desktop. Aborting.",
+            )
+            return 1
 
-    sv = SynapseVoiceApp()
-    return app.exec()
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+        sv = SynapseVoiceApp()
+        return app.exec()
+    except Exception:
+        # Last-resort: log + show error dialog so Windows users see *something*
+        import traceback as _tb
+
+        err = _tb.format_exc()
+        try:
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"\n=== fatal: {datetime.now(timezone.utc).isoformat()} ===\n{err}\n")
+        except Exception:
+            pass
+        try:
+            from PyQt6.QtWidgets import QApplication as _QA, QMessageBox as _QM
+
+            if _QA.instance() is None:
+                _QA(sys.argv)
+            _QM.critical(None, "Synapse Voice — fatal error", f"{err}\n\nLog: {log_file}")
+        except Exception:
+            pass
+        return 2
 
 
 if __name__ == "__main__":

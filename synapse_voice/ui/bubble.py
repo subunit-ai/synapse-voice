@@ -148,6 +148,7 @@ class Bubble(QWidget):
     def _reposition_for_text(self, text: str, anchor_to_cursor: bool) -> None:
         # measure with current font instead of guessing
         from PyQt6.QtGui import QFontMetrics
+        from PyQt6.QtWidgets import QApplication
 
         fm = QFontMetrics(self._font)
         text_w = fm.horizontalAdvance(text) + 12
@@ -155,9 +156,14 @@ class Bubble(QWidget):
         # rail(6) + dot(8+8) + gap + meter + text + right padding(14)
         width = max(220, min(520, 50 + meter_width + text_w))
         self.resize(width, self.BUBBLE_HEIGHT)
-        if anchor_to_cursor:
-            pos = QCursor.pos()
-            self.move(pos.x() + 18, pos.y() + 24)
+
+        # Position at bottom-center of the screen the cursor is on (Wispr-Flow style).
+        # This is way more discoverable than cursor-anchoring.
+        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+        rect = screen.availableGeometry()
+        x = rect.x() + (rect.width() - width) // 2
+        y = rect.y() + rect.height() - self.BUBBLE_HEIGHT - 80
+        self.move(x, y)
 
     def _on_tick(self) -> None:
         if self._state == "recording" and self._level_provider is not None:
