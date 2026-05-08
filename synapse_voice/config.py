@@ -53,6 +53,10 @@ class Config:
     # v0.3.0: Account (subunit-server side)
     account_email: str = ""
 
+    # v0.3.2: Remember which cloud provider the user last picked, so when
+    # they toggle "Process locally" off they go back to the same one.
+    last_cloud_mode: str = "subunit"
+
     # v0.3.0: Auto-update
     auto_update_check: bool = True
 

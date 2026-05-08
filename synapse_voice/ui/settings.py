@@ -25,7 +25,7 @@ from .. import __version__, autostart
 from .. import account as _account_api
 from ..config import Config
 from ..logger import log_file_path
-from ..transcriber import ALL_MODES, mode_label
+from ..transcriber import ALL_MODES, CLOUD_MODES, mode_label
 from ..transcriber.cloud import PROVIDER_PRESETS
 from .hotkey_capture import HotkeyCaptureButton
 from .widgets import AnimatedToggle, BrandLogo
@@ -315,22 +315,35 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(2, 18, 2, 18)
         layout.setSpacing(14)
 
-        layout.addWidget(_section_title("Mode"))
+        # ── Big Local-vs-Cloud switch ──────────────────────────────────────
+        layout.addWidget(_section_title("How to transcribe"))
+        self.local_row = _ToggleRow(
+            "Process locally",
+            "Highest privacy — audio never leaves your machine. "
+            "Disable to use a cloud provider instead.",
+            self.config.mode == "local",
+        )
+        self.local_row.toggle.toggled.connect(self._on_local_toggled)
+        layout.addWidget(self.local_row)
+
+        # Cloud-provider picker (only relevant when local is off).
+        self.cloud_lbl = QLabel("Cloud provider")
+        self.cloud_lbl.setObjectName("dim")
+        layout.addWidget(self.cloud_lbl)
         self.mode_combo = QComboBox()
-        for mode_id in ALL_MODES:
+        for mode_id in CLOUD_MODES:
             label = mode_label(mode_id)
             if mode_id == "subunit":
                 label += "  ·  Recommended"
             self.mode_combo.addItem(label, mode_id)
-        idx = self.mode_combo.findData(self.config.mode)
+        cloud_mode = (
+            self.config.mode if self.config.mode in CLOUD_MODES else self.config.last_cloud_mode
+        )
+        idx = self.mode_combo.findData(cloud_mode)
         if idx >= 0:
             self.mode_combo.setCurrentIndex(idx)
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         layout.addWidget(self.mode_combo)
-        layout.addWidget(_hint(
-            "Local runs entirely on your machine. Subunit uses our DSGVO-compliant "
-            "server. OpenAI / Groq / Custom let you bring your own provider."
-        ))
 
         layout.addSpacing(8)
         layout.addWidget(_section_title("Provider settings"))
@@ -346,8 +359,8 @@ class SettingsDialog(QDialog):
 
         layout.addStretch(1)
 
-        # Activate the right panel for the current mode.
-        self._on_mode_changed(self.mode_combo.currentIndex())
+        # Activate the right panel + apply enabled-state.
+        self._sync_transcription_panel()
         return page
 
     def _build_local_panel(self) -> None:
@@ -487,8 +500,23 @@ class SettingsDialog(QDialog):
         self._panel_index["custom"] = 4
 
     def _on_mode_changed(self, _idx: int) -> None:
-        mode = self.mode_combo.currentData() or "local"
-        self.provider_stack.setCurrentIndex(self._panel_index.get(mode, 0))
+        # The dropdown only has cloud providers now; switching it never enters
+        # local mode — that's owned by the toggle above.
+        self._sync_transcription_panel()
+
+    def _on_local_toggled(self, _checked: bool) -> None:
+        self._sync_transcription_panel()
+
+    def _sync_transcription_panel(self) -> None:
+        """Reflect the current toggle/dropdown state in panel + enabled-state."""
+        is_local = self.local_row.is_on()
+        self.mode_combo.setEnabled(not is_local)
+        self.cloud_lbl.setEnabled(not is_local)
+        if is_local:
+            self.provider_stack.setCurrentIndex(self._panel_index["local"])
+        else:
+            mode = self.mode_combo.currentData() or "subunit"
+            self.provider_stack.setCurrentIndex(self._panel_index.get(mode, 1))
 
     # ── Tab 3: Account ─────────────────────────────────────────────────────
 
@@ -515,7 +543,7 @@ class SettingsDialog(QDialog):
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
-        self.account_signin_btn = QPushButton("Sign in / Sign up")
+        self.account_signin_btn = QPushButton("Get my Subunit key")
         self.account_signin_btn.setObjectName("primary")
         self.account_signin_btn.clicked.connect(self._on_account_signin)
         btn_row.addWidget(self.account_signin_btn)
@@ -528,9 +556,10 @@ class SettingsDialog(QDialog):
 
         layout.addSpacing(8)
         layout.addWidget(_hint(
-            "Sign-up provisions a Subunit API key tied to your email. "
-            "The key gets installed automatically — no manual copy-paste. "
-            "Same email twice returns the same key."
+            "Type your email and click the button — we'll create your account "
+            "and install your API key automatically. Same email always returns "
+            "the same key, so re-installing the app just works.\n\n"
+            "No password yet (coming in a future update)."
         ))
 
         layout.addStretch(1)
@@ -546,9 +575,11 @@ class SettingsDialog(QDialog):
             self.account_logout_btn.setEnabled(True)
         else:
             self.account_status_lbl.setText(
-                "<b>Not signed in.</b>  Enter your email and click "
-                "“Sign in / Sign up” to get a Subunit API key automatically."
+                "<b>No account yet.</b>  Enter your email below and click "
+                "<i>Get my Subunit key</i> — we'll create the account and install "
+                "your key in one step."
             )
+            self.account_signin_btn.setText("Get my Subunit key")
             self.account_logout_btn.setEnabled(False)
 
     def _on_account_signin(self) -> None:
@@ -627,7 +658,16 @@ class SettingsDialog(QDialog):
 
     def apply_to(self, config: Config) -> None:
         config.hotkey = self.hotkey_btn.value() or "<ctrl>+<shift>+<space>"
-        config.mode = self.mode_combo.currentData() or "local"
+        # Mode is derived from the big local toggle; the dropdown only chooses
+        # which cloud provider to use when local is off.
+        cloud_choice = self.mode_combo.currentData() or "subunit"
+        if self.local_row.is_on():
+            config.mode = "local"
+        else:
+            config.mode = cloud_choice
+        # Always remember the most-recent cloud pick so toggling local off
+        # later returns to the same provider.
+        config.last_cloud_mode = cloud_choice
         config.local_model = self.local_model_combo.currentData() or "base"
         config.language = self.lang_edit.text().strip() or "de"
         config.autopaste = self.row_autopaste.is_on()

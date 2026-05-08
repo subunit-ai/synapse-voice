@@ -20,11 +20,12 @@ class Transcriber(Protocol):
 _TRANSCRIBER_CACHE: dict[tuple, Any] = {}
 
 
-# All supported modes — Local + Subunit are first-class (Privacy/DSGVO),
-# OpenAI/Groq/Custom are opt-in cloud backends.
+# All supported modes. Subunit + OpenAI + Groq + Custom are cloud backends;
+# Local is the on-device fallback. Subunit is first among CLOUD_MODES because
+# it's our DSGVO-compliant default — the UI tags it as "Recommended".
 ALL_MODES = ("local", "subunit", "openai", "groq", "custom")
 PRIMARY_MODES = ("local", "subunit")
-CLOUD_MODES = ("openai", "groq", "custom")
+CLOUD_MODES = ("subunit", "openai", "groq", "custom")
 
 
 def mode_label(mode: str) -> str:

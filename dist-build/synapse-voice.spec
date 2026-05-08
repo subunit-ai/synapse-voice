@@ -101,7 +101,10 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     version=str(ROOT / "dist-build" / "version-info.txt"),
-    icon=str(ROOT / "icons" / "subunit-logo.png"),
+    # PyInstaller's Windows-icon embedder expects a real .ico (or ships .png
+    # only when Pillow is installed). We pre-generate the .ico so neither
+    # Pillow nor a runtime conversion is needed in CI.
+    icon=str(ROOT / "icons" / "subunit-logo.ico"),
 )
 
 coll = COLLECT(

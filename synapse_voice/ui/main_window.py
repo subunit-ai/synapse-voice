@@ -24,9 +24,12 @@ from PyQt6.QtWidgets import (
 )
 
 from .. import __version__
+from .. import hardware as _hw
 from ..config import Config
-from ..transcriber import ALL_MODES, mode_label
-from .widgets import BrandLogo
+from ..transcriber import ALL_MODES, CLOUD_MODES, mode_label
+from .widgets import AnimatedToggle, BrandLogo
+
+LOCAL_MODELS = ["base", "small", "medium", "large-v3"]
 
 CYAN = "#40d6ff"
 NIGHT = "#020817"
@@ -181,27 +184,83 @@ class MainWindow(QMainWindow):
         ctrl_title.setObjectName("h2")
         ctrl_l.addWidget(ctrl_title)
 
+        # Row 1: big "Process locally" toggle. Default-on = highest privacy,
+        # no data leaves the machine. When OFF, the cloud-provider picker
+        # in Row 2 becomes active.
+        local_row = QHBoxLayout()
+        local_row.setSpacing(12)
+        local_text = QVBoxLayout()
+        local_text.setSpacing(2)
+        local_title = QLabel("Process locally")
+        local_title.setStyleSheet(f"color: {WHITE}; font-weight: 600;")
+        local_text.addWidget(local_title)
+        local_hint = QLabel(
+            "Highest privacy — audio never leaves your machine. "
+            "Disable to use a cloud provider instead."
+        )
+        local_hint.setObjectName("dim")
+        local_hint.setWordWrap(True)
+        local_text.addWidget(local_hint)
+        local_row.addLayout(local_text, 1)
+        self.local_toggle = AnimatedToggle(checked=(config.mode == "local"))
+        self.local_toggle.toggled.connect(self._on_local_toggled)
+        local_row.addWidget(self.local_toggle, 0, Qt.AlignmentFlag.AlignTop)
+        ctrl_l.addLayout(local_row)
+
+        # Row 1b: local-model picker — only meaningful while the toggle is on.
+        # Lives in Quick Controls (not Settings) because TJ uses it constantly.
+        hw = _hw.detect()
+        recommended = _hw.recommend_local_model(hw)
+        model_row = QHBoxLayout()
+        model_row.setSpacing(10)
+        model_row.setContentsMargins(0, 0, 0, 0)
+        self.local_model_lbl = QLabel("Local model")
+        self.local_model_lbl.setObjectName("dim")
+        model_row.addWidget(self.local_model_lbl)
+        self.local_model_combo = QComboBox()
+        for m in LOCAL_MODELS:
+            label = m
+            if m == recommended:
+                label += "  ⭐ recommended for your hardware"
+            self.local_model_combo.addItem(label, m)
+        idx = self.local_model_combo.findData(config.local_model)
+        if idx >= 0:
+            self.local_model_combo.setCurrentIndex(idx)
+        self.local_model_combo.currentIndexChanged.connect(self._on_local_model_changed)
+        model_row.addWidget(self.local_model_combo)
+        model_row.addStretch()
+        hw_summary = QLabel(_hw.describe(hw))
+        hw_summary.setObjectName("dim")
+        model_row.addWidget(hw_summary)
+        ctrl_l.addLayout(model_row)
+
+        # Row 2: cloud-provider picker — only enabled when local toggle is off.
         row = QHBoxLayout()
         row.setSpacing(10)
-        row.addWidget(QLabel("Mode"))
+        row.addWidget(QLabel("Cloud provider"))
         self.mode_combo = QComboBox()
-        for mode_id in ALL_MODES:
+        for mode_id in CLOUD_MODES:
             label = mode_label(mode_id)
             if mode_id == "subunit":
                 label += "  ·  Recommended"
             self.mode_combo.addItem(label, mode_id)
-        idx = self.mode_combo.findData(config.mode)
+        # If config.mode is local, fall back to last_cloud_mode for the picker.
+        cloud_mode = config.mode if config.mode in CLOUD_MODES else config.last_cloud_mode
+        idx = self.mode_combo.findData(cloud_mode)
         if idx >= 0:
             self.mode_combo.setCurrentIndex(idx)
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         row.addWidget(self.mode_combo)
         row.addStretch()
-
         hotkey_lbl = QLabel(f"Hotkey: {config.hotkey}")
         hotkey_lbl.setObjectName("dim")
         self.hotkey_lbl = hotkey_lbl
         row.addWidget(hotkey_lbl)
         ctrl_l.addLayout(row)
+        # Apply initial enabled state — exactly one of the two pickers is live.
+        self.mode_combo.setEnabled(config.mode != "local")
+        self.local_model_combo.setEnabled(config.mode == "local")
+        self.local_model_lbl.setEnabled(config.mode == "local")
 
         outer.addWidget(ctrl)
 
@@ -250,12 +309,30 @@ class MainWindow(QMainWindow):
         return
 
     def refresh_mode(self) -> None:
-        """Re-sync the mode combo with config (after Settings dialog applied)."""
-        idx = self.mode_combo.findData(self.config.mode)
-        if idx >= 0 and idx != self.mode_combo.currentIndex():
+        """Re-sync toggle/combos with config (after Settings dialog applied)."""
+        is_local = self.config.mode == "local"
+        # Local toggle
+        if self.local_toggle.isChecked() != is_local:
+            self.local_toggle.blockSignals(True)
+            self.local_toggle.setChecked(is_local)
+            self.local_toggle.blockSignals(False)
+        # Cloud-mode combo (only when not local)
+        target_cloud = self.config.mode if self.config.mode in CLOUD_MODES else self.config.last_cloud_mode
+        c_idx = self.mode_combo.findData(target_cloud)
+        if c_idx >= 0 and c_idx != self.mode_combo.currentIndex():
             self.mode_combo.blockSignals(True)
-            self.mode_combo.setCurrentIndex(idx)
+            self.mode_combo.setCurrentIndex(c_idx)
             self.mode_combo.blockSignals(False)
+        # Local-model combo
+        m_idx = self.local_model_combo.findData(self.config.local_model)
+        if m_idx >= 0 and m_idx != self.local_model_combo.currentIndex():
+            self.local_model_combo.blockSignals(True)
+            self.local_model_combo.setCurrentIndex(m_idx)
+            self.local_model_combo.blockSignals(False)
+        # Enabled state
+        self.mode_combo.setEnabled(not is_local)
+        self.local_model_combo.setEnabled(is_local)
+        self.local_model_lbl.setEnabled(is_local)
 
     def refresh(self) -> None:
         self.stat_count.findChild(QLabel, "value").setText(
@@ -291,7 +368,29 @@ class MainWindow(QMainWindow):
     def _on_mode_changed(self, _idx: int) -> None:
         m = self.mode_combo.currentData()
         if m:
+            self.config.last_cloud_mode = m
             self._on_change_mode(m)
+
+    def _on_local_toggled(self, checked: bool) -> None:
+        self.mode_combo.setEnabled(not checked)
+        self.local_model_combo.setEnabled(checked)
+        self.local_model_lbl.setEnabled(checked)
+        if checked:
+            self._on_change_mode("local")
+        else:
+            target = self.mode_combo.currentData() or self.config.last_cloud_mode or "subunit"
+            self._on_change_mode(target)
+
+    def _on_local_model_changed(self, _idx: int) -> None:
+        m = self.local_model_combo.currentData()
+        if not m or m == self.config.local_model:
+            return
+        self.config.local_model = m
+        self.config.save()
+        # Re-apply local mode so the transcriber cache is invalidated and the
+        # new model loads on the next hotkey press.
+        if self.config.mode == "local":
+            self._on_change_mode("local")
 
     def _make_card(self) -> QFrame:
         card = QFrame()
