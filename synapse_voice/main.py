@@ -190,6 +190,12 @@ class SynapseVoiceApp(QObject):
         if self.config.auto_update_check:
             QTimer.singleShot(8_000, self._check_for_updates)
 
+        # v0.4: Show the 4-step onboarding wizard on first launch. We delay
+        # by 600ms so the tray icon + main window are settled by the time
+        # the modal pops up — looks less janky than firing during ctor.
+        if not self.config.has_seen_onboarding:
+            QTimer.singleShot(600, self._show_onboarding)
+
     def _on_hotkey_press(self) -> None:
         """Called from the pynput thread on hotkey press."""
         if self.config.recording_mode == "hold":
@@ -448,6 +454,47 @@ class SynapseVoiceApp(QObject):
         self.main_window.raise_()
         self.main_window.activateWindow()
         self.main_window.refresh()
+
+    def _show_onboarding(self) -> None:
+        """First-launch wizard. Modal — blocks until the user finishes."""
+        from .ui.onboarding import OnboardingDialog
+
+        dlg = OnboardingDialog(self.config, parent=self.main_window)
+
+        def _apply(settings: dict) -> None:
+            self.config.hotkey = settings.get("hotkey") or self.config.hotkey
+            new_mode = settings.get("mode") or self.config.mode
+            if new_mode != self.config.mode:
+                # Route via change_mode so cache invalidation + tray update happens
+                self.change_mode(new_mode)
+            else:
+                self.config.save()
+            self.config.has_seen_onboarding = True
+            self.config.save()
+            # Re-bind hotkey listener if it changed
+            try:
+                self.hotkey.stop()
+            except Exception:
+                pass
+            self.hotkey = GlobalHotkey(
+                self.config.hotkey,
+                on_press=self._on_hotkey_press,
+                on_release=self._on_hotkey_release,
+            )
+            self.hotkey.start()
+            self.main_window.refresh()
+            self.tray.showMessage(
+                "Synapse Voice",
+                f"All set. Press {self.config.hotkey} to dictate.",
+                msecs=4000,
+            )
+
+        dlg.finished_setup.connect(_apply)
+        dlg.exec()
+        # If the user closes via X without clicking Finish, still mark as seen
+        if not self.config.has_seen_onboarding:
+            self.config.has_seen_onboarding = True
+            self.config.save()
 
     def open_history(self) -> None:
         def repaste(text: str) -> None:

@@ -79,6 +79,10 @@ class Config:
     # v0.3.0: Auto-update
     auto_update_check: bool = True
 
+    # v0.4: First-launch onboarding wizard. Flips to True after the user
+    # finishes (or skips) the 4-step setup.
+    has_seen_onboarding: bool = False
+
     # v0.3.9: Lexikon — custom-vocab to bias Whisper toward correct
     # spellings of brand names / technical terms / proper nouns. Each
     # entry: {"sounds_like": "z.B. wie es klingt", "write_as": "Korrekt"}.
