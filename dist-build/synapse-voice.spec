@@ -48,6 +48,7 @@ a = Analysis(
     hiddenimports=[
         "synapse_voice",
         "synapse_voice.account",
+        "synapse_voice.auto_mode",
         "synapse_voice.sounds",
         "synapse_voice.i18n",
         "synapse_voice.theme",

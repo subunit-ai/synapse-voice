@@ -403,6 +403,17 @@ class SettingsDialog(QDialog):
             self.cleanup_style_combo.setCurrentIndex(idx)
         layout.addWidget(self.cleanup_style_combo)
 
+        # v0.3.25: Auto-Mode toggle. When on, the cleanup style above
+        # acts as the FALLBACK; the actual style per-transcription is
+        # derived from the active window via auto_mode.detect().
+        self.row_auto_mode = _ToggleRow(
+            "Auto-Mode — pick style by active window",
+            "ChatGPT/Editor → Prompt · Mail apps → Email · Slack/Discord → Slack · "
+            "Word/Docs → Formal. Falls back to your manual pick if no rule matches.",
+            self.config.cleanup_auto_mode,
+        )
+        layout.addWidget(self.row_auto_mode)
+
         layout.addSpacing(6)
         layout.addWidget(_section_title("Updates"))
         self.row_auto_update = _ToggleRow(
@@ -947,7 +958,9 @@ class SettingsDialog(QDialog):
         if hasattr(self, "vocab_table"):
             config.vocabulary = self._harvest_vocab()
         config.cleanup_enabled = self.row_cleanup.is_on()
-        config.cleanup_style = self.cleanup_style_combo.currentData() or "tidy"
+        config.cleanup_style = self.cleanup_style_combo.currentData() or "prompt"
+        if hasattr(self, "row_auto_mode"):
+            config.cleanup_auto_mode = self.row_auto_mode.is_on()
         config.auto_update_check = self.row_auto_update.is_on()
 
         config.subunit_endpoint = (

@@ -68,6 +68,14 @@ class Config:
     # cleanup_style='tidy' get migrated to 'prompt' on load.
     cleanup_style: str = "prompt"  # prompt | email | slack | formal
 
+    # v0.3.25: Auto-Mode — pick cleanup_style automatically based on the
+    # active window. Off by default so existing user choices stick; the
+    # Onboarding wizard advertises this and flips it on if the user opts
+    # in. `auto_mode_overrides` is a user-editable dict of substring →
+    # style; matches override the curated table in synapse_voice.auto_mode.
+    cleanup_auto_mode: bool = False
+    auto_mode_overrides: dict = field(default_factory=dict)
+
     # v0.3.0: Recording mode. Default = hold (Push-to-Talk) since TJ
     # confirmed Voicely's default works better — press-and-hold maps
     # naturally to "I'm dictating right now".

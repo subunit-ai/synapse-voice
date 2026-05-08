@@ -69,12 +69,23 @@ class _PrewarmWorker(QObject):
 class TranscribeWorker(QObject):
     finished = pyqtSignal(str)
     failed = pyqtSignal(str)
+    # v0.3.25: emit (style, label) when Auto-Mode picks a style different
+    # from the user's manual default. main.py uses this to flash a small
+    # tray confirmation so the user knows what got applied.
+    auto_mode_picked = pyqtSignal(str, str)
 
-    def __init__(self, audio, mode: str, config: Config) -> None:
+    def __init__(
+        self,
+        audio,
+        mode: str,
+        config: Config,
+        window_title: Optional[str] = None,
+    ) -> None:
         super().__init__()
         self._audio = audio
         self._mode = mode
         self._config = config
+        self._window_title = window_title or ""
 
     def run(self) -> None:
         try:
@@ -84,16 +95,40 @@ class TranscribeWorker(QObject):
             if text and self._config.cleanup_enabled:
                 from .cleanup_client import cleanup_text
 
+                # v0.3.25: Auto-Mode — derive style from the active
+                # window if enabled. Falls back to the user's manual
+                # cleanup_style if no rule matched.
+                style = self._config.cleanup_style or "prompt"
+                if self._config.cleanup_auto_mode and self._window_title:
+                    from . import auto_mode
+
+                    detection = auto_mode.detect(self._window_title)
+                    detection = auto_mode.apply_overrides(
+                        detection,
+                        self._config.auto_mode_overrides or {},
+                        self._window_title,
+                    )
+                    if detection is not None:
+                        style, label = detection
+                        if style != (self._config.cleanup_style or "prompt"):
+                            self.auto_mode_picked.emit(style, label)
+                        _log.info(
+                            "Auto-Mode picked '%s' for window '%s' (label=%s)",
+                            style,
+                            self._window_title[:40],
+                            label,
+                        )
+
                 cleaned = cleanup_text(
                     text,
                     transcribe_endpoint=self._config.subunit_endpoint,
                     api_key=self._config.subunit_api_key,
-                    style=self._config.cleanup_style or "tidy",
+                    style=style,
                 )
                 if cleaned and cleaned.strip() != text.strip():
                     _log.info(
                         "Cleanup applied (style=%s, %d→%d chars)",
-                        self._config.cleanup_style,
+                        style,
                         len(text),
                         len(cleaned),
                     )
@@ -295,11 +330,20 @@ class SynapseVoiceApp(QObject):
         # deleteLater on the new thread while the old one's finished signal
         # fires).
         thread = QThread()
-        worker = TranscribeWorker(audio, self.config.mode, self.config)
+        # Pass the captured window title so Auto-Mode can derive the
+        # cleanup style. We use the title from `target_lock.capture_active_window`
+        # taken at recording-start, NOT at paste-time, because the user
+        # may switch windows briefly while speaking — we want the style
+        # to match where they were when they started.
+        win_title = self.target.title if self.target else None
+        worker = TranscribeWorker(
+            audio, self.config.mode, self.config, window_title=win_title
+        )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(self._on_transcribe_done)
         worker.failed.connect(self._on_transcribe_failed)
+        worker.auto_mode_picked.connect(self._on_auto_mode_picked)
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
@@ -378,6 +422,23 @@ class SynapseVoiceApp(QObject):
                 self.orb.show_state("error")
             self.tray.set_state("error", "paste failed")
         QTimer.singleShot(2500, lambda: (self.tray.set_state("idle", "idle"), self._safe_status("idle")))
+
+    def _on_auto_mode_picked(self, style: str, label: str) -> None:
+        """Auto-Mode chose a style different from the user's manual default.
+        Show a small tray confirmation so they know what got applied."""
+        labels = {
+            "prompt": "Prompt",
+            "email": "Email",
+            "slack": "Slack",
+            "formal": "Formal",
+            "tidy": "Tidy",
+        }
+        nice = labels.get(style, style.title())
+        self.tray.showMessage(
+            "Synapse Voice — Auto-Mode",
+            f"{nice} (für {label})",
+            msecs=1800,
+        )
 
     def _on_transcribe_failed(self, message: str) -> None:
         lower = message.lower()
