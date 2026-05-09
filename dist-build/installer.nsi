@@ -17,10 +17,17 @@
   !define APP_VERSION "0.0.0"
 !endif
 
+; Optional architecture suffix appended to the installer filename so we
+; can ship parallel x64 + ARM64 setups without filename collisions.
+; Pass /DARCH_SUFFIX=-arm64 (or empty) when invoking makensis.
+!ifndef ARCH_SUFFIX
+  !define ARCH_SUFFIX ""
+!endif
+
 !include "MUI2.nsh"
 
 Name "${APP_NAME}"
-OutFile "..\dist\SynapseVoice-Setup-${APP_VERSION}.exe"
+OutFile "..\dist\SynapseVoice-Setup-${APP_VERSION}${ARCH_SUFFIX}.exe"
 InstallDir "$PROGRAMFILES64\${APP_NAME}"
 InstallDirRegKey HKLM "${APP_REGKEY}" "InstallLocation"
 RequestExecutionLevel admin

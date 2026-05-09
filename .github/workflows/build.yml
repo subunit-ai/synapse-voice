@@ -158,9 +158,79 @@ jobs:
             dist\SynapseVoice-Setup-*.exe
           if-no-files-found: error
 
+  build-windows-arm64:
+    name: Windows ARM64 (.exe)
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12 (ARM64)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: 'arm64'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: pip-arm64-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pywin32
+
+      - name: Build PyInstaller bundle
+        run: |
+          pyinstaller --clean --noconfirm dist-build\synapse-voice.spec
+
+      - name: Zip distribution
+        run: |
+          Compress-Archive -Path dist\synapse-voice\* -DestinationPath dist\synapse-voice-windows-arm64.zip
+        shell: pwsh
+
+      - name: Install NSIS
+        run: |
+          choco install nsis -y --no-progress
+        shell: pwsh
+
+      - name: Resolve installer version
+        id: ver
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -match '^v(\d+\.\d+\.\d+)$') {
+            $version = $matches[1]
+          } else {
+            $version = "0.0.0"
+          }
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          echo "Resolved version: $version"
+        shell: pwsh
+
+      - name: Build NSIS installer
+        run: |
+          $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          if (-not (Test-Path $nsis)) { $nsis = "C:\Program Files\NSIS\makensis.exe" }
+          if (-not (Test-Path $nsis)) { $nsis = "makensis.exe" }
+          & $nsis "/DAPP_VERSION=${{ steps.ver.outputs.version }}" "/DARCH_SUFFIX=-arm64" dist-build\installer.nsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem dist\SynapseVoice-Setup-*-arm64.exe
+        shell: pwsh
+
+      - name: Upload Windows ARM64 artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-arm64
+          path: |
+            dist\synapse-voice-windows-arm64.zip
+            dist\SynapseVoice-Setup-*-arm64.exe
+          if-no-files-found: error
+
   release:
     name: Release
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows, build-windows-arm64]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
     steps:
@@ -185,7 +255,9 @@ jobs:
               artefacts/linux-x86_64/synapse-voice-linux-x86_64.tar.gz \
               artefacts/linux-x86_64/SynapseVoice-x86_64.AppImage \
               artefacts/windows-x86_64/synapse-voice-windows-x86_64.zip \
-              artefacts/windows-x86_64/SynapseVoice-Setup-*.exe; do
+              artefacts/windows-x86_64/SynapseVoice-Setup-*.exe \
+              artefacts/windows-arm64/synapse-voice-windows-arm64.zip \
+              artefacts/windows-arm64/SynapseVoice-Setup-*-arm64.exe; do
               if [ -f "$f" ]; then
                 hash=$(sha256sum "$f" | awk '{print $1}')
                 name=$(basename "$f")
@@ -208,3 +280,5 @@ jobs:
             artefacts/linux-x86_64/SynapseVoice-x86_64.AppImage
             artefacts/windows-x86_64/synapse-voice-windows-x86_64.zip
             artefacts/windows-x86_64/SynapseVoice-Setup-*.exe
+            artefacts/windows-arm64/synapse-voice-windows-arm64.zip
+            artefacts/windows-arm64/SynapseVoice-Setup-*-arm64.exe
