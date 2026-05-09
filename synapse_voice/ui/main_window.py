@@ -1,6 +1,6 @@
 """Main application window — dashboard / control center.
 
-A real top-level window so Synapse Voice feels like an installed app, not just a
+A real top-level window so Sonar feels like an installed app, not just a
 tray gadget. Closing the window hides it; quitting goes through the tray menu.
 """
 from __future__ import annotations
@@ -284,7 +284,7 @@ class MainWindow(QMainWindow):
         self._on_open_history = on_open_history
         self._on_quit = on_quit
 
-        self.setWindowTitle("Synapse Voice")
+        self.setWindowTitle("Sonar")
         self.setStyleSheet(QSS)
         self.setMinimumSize(640, 520)
         self.resize(720, 600)
@@ -302,7 +302,7 @@ class MainWindow(QMainWindow):
         header.addWidget(BrandLogo(size=56))
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
-        title = QLabel("Synapse Voice")
+        title = QLabel("Sonar")
         title.setObjectName("h1")
         version = QLabel(f"v{__version__}")
         version.setObjectName("dim")

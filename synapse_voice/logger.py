@@ -123,7 +123,7 @@ def init_logging(app_version: str) -> Path:
 
     logger.info("=" * 60)
     logger.info(
-        "Synapse Voice %s starting on %s (python %s)",
+        "Sonar %s starting on %s (python %s)",
         app_version,
         sys.platform,
         sys.version.split()[0],

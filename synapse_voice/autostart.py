@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-APP_NAME = "Synapse Voice"
+APP_NAME = "Sonar"
 APP_KEY = "synapse-voice"
 
 

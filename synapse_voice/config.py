@@ -1,4 +1,4 @@
-"""Persistent configuration for Synapse Voice."""
+"""Persistent configuration for Sonar."""
 from __future__ import annotations
 
 import json
@@ -62,7 +62,7 @@ class Config:
 
     # v0.3.0: AI cleanup layer (default off — TJ-pref)
     cleanup_enabled: bool = False
-    # v0.3.24: default style flipped from tidy → prompt because Synapse Voice's
+    # v0.3.24: default style flipped from tidy → prompt because Sonar's
     # primary use is dictating prompts to AI agents. Tidy was dropped from
     # the picker (TJ feedback "kommt mir komisch"). Old configs with
     # cleanup_style='tidy' get migrated to 'prompt' on load.

@@ -1,4 +1,4 @@
-"""Synapse Voice — entry point."""
+"""Sonar — entry point."""
 from __future__ import annotations
 
 import signal
@@ -267,7 +267,7 @@ class SynapseVoiceApp(QObject):
         self.hotkey.start()
 
         self.tray.showMessage(
-            "Synapse Voice",
+            "Sonar",
             f"Active. Hotkey: {self.config.hotkey} · Mode: {self.config.mode}",
             msecs=3000,
         )
@@ -488,7 +488,7 @@ class SynapseVoiceApp(QObject):
         }
         nice = labels.get(style, style.title())
         self.tray.showMessage(
-            "Synapse Voice — Auto-Mode",
+            "Sonar — Auto-Mode",
             f"{nice} (für {label})",
             msecs=1800,
         )
@@ -534,7 +534,7 @@ class SynapseVoiceApp(QObject):
             # Switch the desktop app back to free local mode in-place
             self.change_mode("local")
             self.tray.showMessage(
-                "Synapse Voice",
+                "Sonar",
                 "Switched to Local mode. Cloud disabled until you upgrade.",
                 msecs=3500,
             )
@@ -587,7 +587,7 @@ class SynapseVoiceApp(QObject):
         self.tray.set_state("error", "error")
         self._safe_status("error", color="#ffc450")
         self.bubble.show_state("error", f"⚠ {message[:60]}", auto_hide_ms=5000)
-        self.tray.showMessage("Synapse Voice — error", message, msecs=4000)
+        self.tray.showMessage("Sonar — error", message, msecs=4000)
         QTimer.singleShot(3000, lambda: (self.tray.set_state("idle", "idle"), self._safe_status("idle")))
 
     def _record_history(self, text: str, mode: str) -> None:
@@ -635,7 +635,7 @@ class SynapseVoiceApp(QObject):
             except Exception:
                 pass
             self.tray.showMessage(
-                "Synapse Voice",
+                "Sonar",
                 f"Updated. Hotkey: {self.config.hotkey} · Mode: {self.config.mode}",
                 msecs=2500,
             )
@@ -645,7 +645,7 @@ class SynapseVoiceApp(QObject):
 
         box = QMessageBox()
         box.setIcon(QMessageBox.Icon.Information)
-        box.setWindowTitle("Synapse Voice")
+        box.setWindowTitle("Sonar")
         box.setText(message)
         box.setStandardButtons(
             QMessageBox.StandardButton.Open | QMessageBox.StandardButton.Cancel
@@ -720,7 +720,7 @@ class SynapseVoiceApp(QObject):
                 _log.exception("Failed to update hotkey after onboarding")
             self.main_window.refresh()
             self.tray.showMessage(
-                "Synapse Voice",
+                "Sonar",
                 f"All set. Press {self.config.hotkey} to dictate.",
                 msecs=4000,
             )
@@ -740,7 +740,7 @@ class SynapseVoiceApp(QObject):
             from .target_lock import set_clipboard
             set_clipboard(text)
             self.tray.showMessage(
-                "Synapse Voice", "History entry copied to clipboard", msecs=1500
+                "Sonar", "History entry copied to clipboard", msecs=1500
             )
 
         dlg = HistoryDialog(self.config, on_repaste=repaste)
@@ -750,7 +750,7 @@ class SynapseVoiceApp(QObject):
         self.config.mode = mode
         self.config.save()
         self.tray.set_mode(mode)
-        self.tray.showMessage("Synapse Voice", f"Mode: {mode}", msecs=1500)
+        self.tray.showMessage("Sonar", f"Mode: {mode}", msecs=1500)
 
     def _check_for_updates(self) -> None:
         from PyQt6.QtCore import QUrl
@@ -765,7 +765,7 @@ class SynapseVoiceApp(QObject):
         _log.info("Prompting user for update %s → %s", info.current, info.latest)
         box = QMessageBox()
         box.setIcon(QMessageBox.Icon.Information)
-        box.setWindowTitle("Synapse Voice — Update available")
+        box.setWindowTitle("Sonar — Update available")
         # If we have a direct installer URL we offer a one-click install,
         # otherwise we fall back to the release page (e.g. unsupported
         # platform or asset naming changed).
@@ -813,7 +813,7 @@ class SynapseVoiceApp(QObject):
             0,
             100,
         )
-        progress.setWindowTitle("Synapse Voice — Updating")
+        progress.setWindowTitle("Sonar — Updating")
         progress.setWindowModality(Qt.WindowModality.ApplicationModal)
         progress.setMinimumDuration(0)
         progress.setAutoClose(False)
@@ -863,7 +863,7 @@ class SynapseVoiceApp(QObject):
                 _log.exception("launch_installer failed")
                 QMessageBox.warning(
                     None,
-                    "Synapse Voice — Update failed",
+                    "Sonar — Update failed",
                     f"Could not launch the installer:\n\n{e}",
                 )
                 return
@@ -877,7 +877,7 @@ class SynapseVoiceApp(QObject):
             _log.error("Update download failed: %s", err)
             QMessageBox.warning(
                 None,
-                "Synapse Voice — Update failed",
+                "Sonar — Update failed",
                 f"Could not download the update:\n\n{err}\n\n"
                 f"You can grab it manually from:\n{info.release_url}",
             )
@@ -900,7 +900,7 @@ def main() -> int:
     try:
         app = QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
-        app.setApplicationName("Synapse Voice")
+        app.setApplicationName("Sonar")
         app.setApplicationVersion(__version__)
 
         # Brand icon — used for the title bar, Alt-Tab switcher and Win taskbar.
@@ -914,7 +914,7 @@ def main() -> int:
             pass
 
         # Windows: register an explicit AppUserModelID so taskbar entries
-        # group under "Synapse Voice" instead of the generic Python interp.
+        # group under "Sonar" instead of the generic Python interp.
         if sys.platform == "win32":
             try:
                 import ctypes
@@ -928,7 +928,7 @@ def main() -> int:
         if not Tray.isSystemTrayAvailable():
             QMessageBox.critical(
                 None,
-                "Synapse Voice",
+                "Sonar",
                 "System tray is not available on this desktop. Aborting.",
             )
             return 1
@@ -948,7 +948,7 @@ def main() -> int:
             err = traceback.format_exc()
             _QM.critical(
                 None,
-                "Synapse Voice — fatal error",
+                "Sonar — fatal error",
                 f"{err}\n\nLog: {log_file}",
             )
         except Exception:

@@ -198,7 +198,7 @@ class _ToggleRow(QWidget):
 class SettingsDialog(QDialog):
     def __init__(self, config: Config, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Synapse Voice — Settings")
+        self.setWindowTitle("Sonar — Settings")
         self.setStyleSheet(DARK_QSS)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         # Size hint — comfortably fits the General tab on a typical 1080p
@@ -220,7 +220,7 @@ class SettingsDialog(QDialog):
         h1 = QLabel("Settings")
         h1.setObjectName("h1")
         title_box.addWidget(h1)
-        title_box.addWidget(_hint(f"Synapse Voice  ·  v{__version__}"))
+        title_box.addWidget(_hint(f"Sonar  ·  v{__version__}"))
         head.addLayout(title_box, 1)
         outer.addLayout(head)
 
@@ -716,7 +716,7 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(_section_title("Custom rules"))
         layout.addWidget(_hint(
-            "When Auto-Mode is on (General tab), Synapse Voice picks the "
+            "When Auto-Mode is on (General tab), Sonar picks the "
             "cleanup style based on the active window. Add your own rules "
             "below — e.g. window contains \"Notion\" → Prompt. Custom rules "
             "override the built-in catalogue. Match is case-insensitive "
@@ -961,7 +961,7 @@ class SettingsDialog(QDialog):
 
         email = self.account_email_edit.text().strip()
         if "@" not in email:
-            QMessageBox.warning(self, "Synapse Voice", "Please enter a valid email.")
+            QMessageBox.warning(self, "Sonar", "Please enter a valid email.")
             return
         endpoint = (
             self.subunit_endpoint_edit.text().strip()
@@ -970,7 +970,7 @@ class SettingsDialog(QDialog):
         try:
             acct = _account_api.sign_up(endpoint, email)
         except Exception as e:
-            QMessageBox.critical(self, "Synapse Voice — sign-up failed", str(e))
+            QMessageBox.critical(self, "Sonar — sign-up failed", str(e))
             return
         # Persist immediately to config so the key is usable even if user clicks Cancel.
         self.config.account_email = acct.email
@@ -986,7 +986,7 @@ class SettingsDialog(QDialog):
             if acct.is_new
             else f"Welcome back. Key refreshed."
         )
-        QMessageBox.information(self, "Synapse Voice", msg)
+        QMessageBox.information(self, "Sonar", msg)
 
     def _on_account_logout(self) -> None:
         self.config.account_email = ""
@@ -1006,7 +1006,7 @@ class SettingsDialog(QDialog):
         layout.setSpacing(14)
 
         layout.addWidget(_section_title("About"))
-        layout.addWidget(QLabel(f"Synapse Voice  v{__version__}"))
+        layout.addWidget(QLabel(f"Sonar  v{__version__}"))
         layout.addWidget(_hint("Hotkey-driven speech-to-text for the subunit ecosystem."))
 
         layout.addSpacing(8)

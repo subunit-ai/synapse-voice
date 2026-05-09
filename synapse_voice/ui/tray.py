@@ -48,17 +48,17 @@ class Tray(QSystemTrayIcon):
             "error": _make_icon(GRAY),
         }
         self.setIcon(self._icons["idle"])
-        self.setToolTip("Synapse Voice — idle")
+        self.setToolTip("Sonar — idle")
 
         # Hold menu as instance attribute — without it, Windows can GC the menu after __init__.
         self._menu = QMenu()
 
-        self._version_action = QAction(f"Synapse Voice  v{__version__}", self._menu)
+        self._version_action = QAction(f"Sonar  v{__version__}", self._menu)
         self._version_action.setEnabled(False)
         self._menu.addAction(self._version_action)
         self._menu.addSeparator()
 
-        self._open_window_action = QAction("Open Synapse Voice", self._menu)
+        self._open_window_action = QAction("Open Sonar", self._menu)
         self._open_window_action.triggered.connect(lambda: on_open_window())
         font = self._open_window_action.font()
         font.setBold(True)
@@ -120,7 +120,7 @@ class Tray(QSystemTrayIcon):
         if state in self._icons:
             self.setIcon(self._icons[state])
         if tooltip:
-            self.setToolTip(f"Synapse Voice — {tooltip}")
+            self.setToolTip(f"Sonar — {tooltip}")
 
     def set_mode(self, mode: str) -> None:
         for act in self._mode_group.actions():

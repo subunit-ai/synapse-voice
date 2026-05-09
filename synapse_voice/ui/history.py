@@ -45,7 +45,7 @@ class HistoryDialog(QDialog):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Synapse Voice — History")
+        self.setWindowTitle("Sonar — History")
         self.setStyleSheet(DARK_QSS)
         self.resize(640, 480)
         self._config = config

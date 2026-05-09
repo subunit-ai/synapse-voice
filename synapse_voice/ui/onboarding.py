@@ -274,7 +274,7 @@ class OnboardingDialog(QDialog):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Synapse Voice")
+        self.setWindowTitle("Sonar")
         self.setStyleSheet(QSS)
         self.setModal(True)
         self.setMinimumSize(640, 540)
@@ -680,7 +680,7 @@ class OnboardingDialog(QDialog):
         l.addWidget(self._auto_title)
 
         self._auto_sub = QLabel(
-            "Synapse Voice merkt, in welchem Fenster du tippst, und passt den "
+            "Sonar merkt, in welchem Fenster du tippst, und passt den "
             "Cleanup-Stil automatisch an. Diktierst du in ChatGPT? Du bekommst "
             "einen strukturierten Prompt. In Gmail? Eine höfliche Mail. In "
             "Slack? Ein lockerer Ping. Klick dich durch:"

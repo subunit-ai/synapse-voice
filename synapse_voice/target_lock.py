@@ -44,7 +44,7 @@ def capture_active_window() -> WindowTarget | None:
             hwnd = user32.GetForegroundWindow()
 
             # Guard: don't capture our own window as the paste target —
-            # otherwise pressing the hotkey while Synapse Voice itself has
+            # otherwise pressing the hotkey while Sonar itself has
             # focus would auto-paste back into our settings dialog.
             try:
                 pid_buf = ctypes.c_ulong(0)

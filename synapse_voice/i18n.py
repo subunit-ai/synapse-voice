@@ -13,7 +13,7 @@ from typing import Optional
 
 _LANG_DE: dict[str, str] = {
     # General
-    "app.name": "Synapse Voice",
+    "app.name": "Sonar",
     "app.tagline": "Hotkey-Diktat fuer alle deine Apps",
 
     # Onboarding wizard
@@ -48,7 +48,7 @@ _LANG_DE: dict[str, str] = {
     "onb.test.mic_label": "Mikrofon-Test",
     "onb.test.try_label": "Hier reinpasten — druecke deinen Hotkey, sprich, und schau ob's landet:",
     "onb.test.try_placeholder": "Cursor hier reinklicken, dann Hotkey halten, sprechen, loslassen…",
-    "onb.test.ready": "✓ Bereit. Klicke Fertig um Synapse Voice zu starten.",
+    "onb.test.ready": "✓ Bereit. Klicke Fertig um Sonar zu starten.",
     "onb.test.your_hotkey": "Dein Hotkey:",
 
     "onb.btn.back": "Zurueck",
@@ -136,7 +136,7 @@ _LANG_DE: dict[str, str] = {
 
 # English: all keys mapped 1:1; missing entries fall back to the key.
 _LANG_EN: dict[str, str] = {
-    "app.name": "Synapse Voice",
+    "app.name": "Sonar",
     "app.tagline": "Hotkey dictation for every app",
 
     "onb.welcome.title": "Welcome.",
@@ -170,7 +170,7 @@ _LANG_EN: dict[str, str] = {
     "onb.test.mic_label": "Microphone test",
     "onb.test.try_label": "Type or dictate here — press your hotkey, speak, see it land:",
     "onb.test.try_placeholder": "Click here, then hold your hotkey, speak, release…",
-    "onb.test.ready": "✓ Ready to go. Press Finish to start using Synapse Voice.",
+    "onb.test.ready": "✓ Ready to go. Press Finish to start using Sonar.",
     "onb.test.your_hotkey": "Your hotkey:",
 
     "onb.btn.back": "Back",
