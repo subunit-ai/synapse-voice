@@ -478,20 +478,54 @@ class OnboardingDialog(QDialog):
             "color: #e2e8f0; } "
             "QLineEdit:focus { border-color: #06b6d4; }"
         )
-        self._acc_email.returnPressed.connect(self._on_signup_clicked)
+        self._acc_email.returnPressed.connect(self._on_account_primary)
         l.addWidget(self._acc_email)
 
-        # Sign-up button (primary) + skip (ghost)
+        # Code input — hidden until the user has requested a code.
+        # Six digits, monospaced, comfortable spacing — reads as "type
+        # the number from the email here".
+        self._acc_code_lbl = QLabel(tr("onb.account.code_label"))
+        self._acc_code_lbl.setObjectName("dim")
+        self._acc_code_lbl.setVisible(False)
+        l.addWidget(self._acc_code_lbl)
+
+        self._acc_code = QLineEdit()
+        self._acc_code.setPlaceholderText("000000")
+        self._acc_code.setMaxLength(6)
+        self._acc_code.setStyleSheet(
+            "QLineEdit { font-family: 'SF Mono','Menlo','Consolas',monospace; "
+            "font-size: 22px; letter-spacing: 0.32em; padding: 10px 14px; "
+            "background: rgba(255,255,255,0.04); "
+            "border: 1px solid rgba(255,255,255,0.10); border-radius: 8px; "
+            "color: #e2e8f0; } "
+            "QLineEdit:focus { border-color: #06b6d4; }"
+        )
+        self._acc_code.returnPressed.connect(self._on_account_primary)
+        self._acc_code.setVisible(False)
+        l.addWidget(self._acc_code)
+
+        # Primary button.  Text + handler change with the flow stage.
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
-        self._acc_signup_btn = QPushButton(tr("onb.account.btn.signup"))
+        self._acc_signup_btn = QPushButton(tr("onb.account.btn.request_code"))
         self._acc_signup_btn.setObjectName("primary")
         self._acc_signup_btn.setStyleSheet(
             "QPushButton#primary { font-weight: 700; padding: 10px 18px; }"
         )
-        self._acc_signup_btn.clicked.connect(self._on_signup_clicked)
+        self._acc_signup_btn.clicked.connect(self._on_account_primary)
         btn_row.addWidget(self._acc_signup_btn, 1)
         l.addLayout(btn_row)
+
+        # "Code nochmal senden" — visible only in stage 2.
+        self._acc_resend_btn = QPushButton(tr("onb.account.btn.resend"))
+        self._acc_resend_btn.setObjectName("ghost")
+        self._acc_resend_btn.setStyleSheet(
+            "QPushButton#ghost { font-size: 13px; padding: 4px 8px; }"
+        )
+        self._acc_resend_btn.setFlat(True)
+        self._acc_resend_btn.clicked.connect(self._on_account_resend)
+        self._acc_resend_btn.setVisible(False)
+        l.addWidget(self._acc_resend_btn, 0, Qt.AlignmentFlag.AlignLeft)
 
         # Status (hidden until we have something to say)
         self._acc_status = QLabel("")
@@ -499,6 +533,10 @@ class OnboardingDialog(QDialog):
         self._acc_status.setWordWrap(True)
         self._acc_status.setStyleSheet("padding: 4px 0;")
         l.addWidget(self._acc_status)
+
+        # State machine: "email" (collect email + request code)
+        # or "code" (collect 6-digit code + verify).  Defaults to email.
+        self._acc_stage = "email"
 
         # Benefit list — three short rows with cyan dot prefixes
         l.addSpacing(8)
@@ -918,23 +956,43 @@ class OnboardingDialog(QDialog):
         self._theme_dark_card.set_active(is_dark)
         self._theme_light_card.set_active(not is_dark)
 
-    # ── Account sign-up ────────────────────────────────────────────────────
+    # ── Account sign-up (email-verified, v0.5.0) ──────────────────────────
 
-    def _on_signup_clicked(self) -> None:
+    def _on_account_primary(self) -> None:
+        """Primary button click.  Dispatches based on stage:
+        - "email" → request a verification code
+        - "code" → verify the entered code"""
+        if self._acc_stage == "email":
+            self._do_request_code()
+        elif self._acc_stage == "code":
+            self._do_verify_code()
+
+    def _on_account_resend(self) -> None:
+        """User asked for a fresh code.  Reuses request_code with the
+        already-entered email; the server enforces the 30 s cooldown."""
+        if self._acc_stage != "code":
+            return
+        self._do_request_code(resending=True)
+
+    def _do_request_code(self, resending: bool = False) -> None:
         email = (self._acc_email.text() or "").strip()
         if "@" not in email or "." not in email or len(email) < 5:
             self._set_account_status(tr("onb.account.invalid"), error=True)
             return
         self._acc_signup_btn.setEnabled(False)
         self._acc_email.setEnabled(False)
-        self._set_account_status(tr("onb.account.signing_up"), error=False)
+        if resending:
+            self._acc_resend_btn.setEnabled(False)
+            self._set_account_status(tr("onb.account.resending"), error=False)
+        else:
+            self._set_account_status(tr("onb.account.requesting"), error=False)
 
-        # Send POST in a worker thread so we don't block the GUI
         from PyQt6.QtCore import QThread, pyqtSignal as _sig
+        from .. import account as _account_api
 
-        class _SignUpWorker(QObject):
-            done = _sig(dict)
-            failed = _sig(str)
+        class _RequestCodeWorker(QObject):
+            done = _sig(dict)         # ttl_seconds + resend_cooldown
+            failed = _sig(str, int)   # (kind, retry_after)
 
             def __init__(self, endpoint: str, email_: str) -> None:
                 super().__init__()
@@ -943,41 +1001,151 @@ class OnboardingDialog(QDialog):
 
             def run(self) -> None:
                 try:
-                    import requests
-                    r = requests.post(
-                        self.endpoint,
-                        json={"email": self.email},
-                        timeout=20,
-                    )
-                    if r.status_code == 409:
-                        self.failed.emit("exists")
-                        return
-                    r.raise_for_status()
-                    self.done.emit(r.json())
-                except requests.HTTPError as e:
-                    self.failed.emit(f"http:{e.response.status_code}")
-                except requests.RequestException:
-                    self.failed.emit("network")
-                except Exception as e:
-                    self.failed.emit(f"unknown:{e}")
+                    res = _account_api.request_code(self.endpoint, self.email)
+                    self.done.emit({
+                        "ttl": res.ttl_seconds,
+                        "cooldown": res.resend_cooldown_seconds,
+                    })
+                except _account_api.EmailAlreadyRegistered:
+                    self.failed.emit("exists", 0)
+                except _account_api.CodeRateLimited as e:
+                    self.failed.emit("rate_limited", int(e.retry_after))
+                except _account_api.EmailDeliveryFailed:
+                    self.failed.emit("delivery", 0)
+                except _account_api.CodeError as e:
+                    self.failed.emit(f"err:{e}", 0)
+                except Exception as e:  # noqa: BLE001
+                    self.failed.emit(f"unknown:{e}", 0)
 
-        # Derive sign-up endpoint from the configured transcribe URL
-        transcribe_url = self.config.subunit_endpoint or ""
-        signup_url = transcribe_url.rsplit("/v1/", 1)[0] + "/v1/account/sign-up"
-
+        endpoint = self.config.subunit_endpoint or ""
         thread = QThread(self)
-        worker = _SignUpWorker(signup_url, email)
+        worker = _RequestCodeWorker(endpoint, email)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.done.connect(self._on_signup_ok)
-        worker.failed.connect(self._on_signup_fail)
+        worker.done.connect(self._on_request_code_ok)
+        worker.failed.connect(self._on_request_code_fail)
         worker.done.connect(thread.quit)
         worker.failed.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        # Hold a reference so neither side gets GC'd mid-flight
         self._signup_thread = (thread, worker)
         thread.start()
+
+    def _on_request_code_ok(self, result: dict) -> None:
+        """Server emailed the code.  Switch the UI into stage 2."""
+        self._acc_stage = "code"
+        self._acc_email.setEnabled(False)  # locked while we verify
+        self._acc_code_lbl.setVisible(True)
+        self._acc_code.setVisible(True)
+        self._acc_resend_btn.setVisible(True)
+        self._acc_resend_btn.setEnabled(True)
+        self._acc_signup_btn.setEnabled(True)
+        self._acc_signup_btn.setText(tr("onb.account.btn.verify"))
+        self._set_account_status(tr("onb.account.code_sent"), error=False)
+        self._acc_code.setFocus()
+
+    def _on_request_code_fail(self, kind: str, retry_after: int) -> None:
+        self._acc_signup_btn.setEnabled(True)
+        self._acc_email.setEnabled(True)
+        if self._acc_stage == "code":
+            self._acc_resend_btn.setEnabled(True)
+
+        if kind == "exists":
+            self._set_account_status(tr("onb.account.exists"), error=True)
+        elif kind == "rate_limited":
+            self._set_account_status(
+                tr("onb.account.rate_limited", n=retry_after), error=True
+            )
+        elif kind == "delivery":
+            self._set_account_status(tr("onb.account.delivery_failed"), error=True)
+        else:
+            self._set_account_status(tr("onb.account.network"), error=True)
+
+    def _do_verify_code(self) -> None:
+        email = (self._acc_email.text() or "").strip()
+        code = (self._acc_code.text() or "").strip()
+        if not code.isdigit() or len(code) != 6:
+            self._set_account_status(tr("onb.account.code_invalid"), error=True)
+            return
+        self._acc_signup_btn.setEnabled(False)
+        self._acc_code.setEnabled(False)
+        self._set_account_status(tr("onb.account.verifying"), error=False)
+
+        from PyQt6.QtCore import QThread, pyqtSignal as _sig
+        from .. import account as _account_api
+
+        class _VerifyCodeWorker(QObject):
+            done = _sig(dict)
+            failed = _sig(str, int)  # (kind, attempts_remaining)
+
+            def __init__(self, endpoint: str, email_: str, code_: str) -> None:
+                super().__init__()
+                self.endpoint = endpoint
+                self.email = email_
+                self.code = code_
+
+            def run(self) -> None:
+                try:
+                    acct = _account_api.verify_code(
+                        self.endpoint, self.email, self.code
+                    )
+                    self.done.emit({
+                        "email": acct.email,
+                        "api_key": acct.api_key,
+                        "plan": acct.plan,
+                    })
+                except _account_api.CodeWrong as e:
+                    self.failed.emit("wrong", int(e.attempts_remaining))
+                except _account_api.CodeExpired:
+                    self.failed.emit("expired", 0)
+                except _account_api.CodeLocked:
+                    self.failed.emit("locked", 0)
+                except _account_api.CodeNotFound:
+                    self.failed.emit("not_found", 0)
+                except _account_api.EmailAlreadyRegistered:
+                    self.failed.emit("exists", 0)
+                except _account_api.CodeError as e:
+                    self.failed.emit(f"err:{e}", 0)
+                except Exception as e:  # noqa: BLE001
+                    self.failed.emit(f"unknown:{e}", 0)
+
+        endpoint = self.config.subunit_endpoint or ""
+        thread = QThread(self)
+        worker = _VerifyCodeWorker(endpoint, email, code)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.done.connect(self._on_signup_ok)
+        worker.failed.connect(self._on_verify_fail)
+        worker.done.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._signup_thread = (thread, worker)
+        thread.start()
+
+    def _on_verify_fail(self, kind: str, attempts_remaining: int) -> None:
+        self._acc_signup_btn.setEnabled(True)
+        self._acc_code.setEnabled(True)
+        self._acc_code.setFocus()
+        self._acc_code.selectAll()
+
+        if kind == "wrong":
+            if attempts_remaining > 0:
+                self._set_account_status(
+                    tr("onb.account.code_wrong", n=attempts_remaining), error=True
+                )
+            else:
+                self._set_account_status(tr("onb.account.locked"), error=True)
+        elif kind == "expired":
+            self._set_account_status(tr("onb.account.code_expired"), error=True)
+        elif kind == "locked":
+            self._set_account_status(tr("onb.account.locked"), error=True)
+        elif kind == "not_found":
+            self._set_account_status(tr("onb.account.code_not_found"), error=True)
+        elif kind == "exists":
+            self._set_account_status(tr("onb.account.exists"), error=True)
+        else:
+            self._set_account_status(tr("onb.account.network"), error=True)
 
     def _on_signup_ok(self, result: dict) -> None:
         # Persist email + key + plan + trial start time

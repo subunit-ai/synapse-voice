@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir \
     "numpy>=1.26" \
     "pydantic[email]>=2.5" \
     "httpx>=0.27" \
+    "requests>=2.31" \
     "nvidia-cublas-cu12" \
     "nvidia-cudnn-cu12==9.*"
 
@@ -27,7 +28,7 @@ ARG WHISPER_MODEL=large-v3-turbo
 ENV WHISPER_MODEL=${WHISPER_MODEL}
 RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('${WHISPER_MODEL}', device='cpu', compute_type='int8')"
 
-COPY main.py accounts.py cleanup.py /app/
+COPY main.py accounts.py cleanup.py email_send.py /app/
 
 # Persistent storage for the accounts SQLite db
 VOLUME ["/data"]

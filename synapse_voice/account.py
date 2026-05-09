@@ -70,6 +70,9 @@ def _account_base(transcribe_endpoint: str) -> str:
 
 
 def sign_up(transcribe_endpoint: str, email: str) -> Account:
+    """DEPRECATED v0.5.0 — direct unverified signup.  Kept only for
+    backward compat with v0.4.x clients.  New code should use
+    :func:`request_code` + :func:`verify_code`."""
     base = _account_base(transcribe_endpoint)
     url = f"{base}/v1/account/sign-up"
     try:
@@ -95,6 +98,140 @@ def sign_up(transcribe_endpoint: str, email: str) -> Account:
     except requests.RequestException as e:
         _log.error("Account sign-up network error: %s", e)
         raise RuntimeError(f"Sign-up failed: {e}") from e
+
+
+# ── Email-verified signup (v0.5.0) ─────────────────────────────────────
+
+
+@dataclass
+class CodeRequestResult:
+    """Returned by :func:`request_code` on success.  ``ttl_seconds`` is the
+    code's validity window (typically 600s), ``resend_cooldown_seconds``
+    is the minimum delay before the same email can request a fresh code."""
+
+    sent: bool
+    ttl_seconds: int
+    resend_cooldown_seconds: int
+
+
+class CodeError(RuntimeError):
+    """Generic verification flow error.  Subclasses carry specific intent
+    so the UI can show targeted messages."""
+
+
+class EmailAlreadyRegistered(CodeError):
+    """The email already has an account — direct user to recovery."""
+
+
+class CodeRateLimited(CodeError):
+    """A code was requested too soon after the previous one."""
+
+    def __init__(self, retry_after: int) -> None:
+        super().__init__(f"retry after {retry_after}s")
+        self.retry_after = retry_after
+
+
+class CodeWrong(CodeError):
+    """The code didn't match.  ``attempts_remaining`` reflects how many
+    more wrong tries are left before the row locks."""
+
+    def __init__(self, attempts_remaining: int) -> None:
+        super().__init__(f"{attempts_remaining} attempts remaining")
+        self.attempts_remaining = attempts_remaining
+
+
+class CodeExpired(CodeError):
+    """The code's TTL elapsed.  User needs to request a fresh one."""
+
+
+class CodeLocked(CodeError):
+    """Too many wrong attempts — user must request a fresh code."""
+
+
+class CodeNotFound(CodeError):
+    """No pending signup for this email — user must request a code."""
+
+
+class EmailDeliveryFailed(CodeError):
+    """Server accepted the request but Resend rejected delivery."""
+
+
+def request_code(transcribe_endpoint: str, email: str) -> CodeRequestResult:
+    """Step 1 of the verified signup flow.  Asks the server to email a
+    6-digit code to ``email``.  On success returns the TTL + cooldown so
+    the UI can show a countdown.  Raises :class:`CodeError` subclasses
+    on any user-facing failure."""
+    base = _account_base(transcribe_endpoint)
+    url = f"{base}/v1/account/request-code"
+    try:
+        r = requests.post(url, json={"email": email}, timeout=20)
+    except requests.RequestException as e:
+        _log.error("request_code network error: %s", e)
+        raise CodeError(f"network error: {e}") from e
+
+    if r.status_code == 200:
+        data = r.json()
+        return CodeRequestResult(
+            sent=bool(data.get("sent", False)),
+            ttl_seconds=int(data.get("ttl_seconds", 600)),
+            resend_cooldown_seconds=int(data.get("resend_cooldown_seconds", 30)),
+        )
+    if r.status_code == 409:
+        raise EmailAlreadyRegistered(email)
+    if r.status_code == 429:
+        try:
+            retry_after = int(r.json().get("retry_after", 30))
+        except Exception:
+            retry_after = 30
+        raise CodeRateLimited(retry_after)
+    if r.status_code == 502:
+        raise EmailDeliveryFailed("the server couldn't deliver the code")
+    raise CodeError(f"server error: HTTP {r.status_code} {r.text[:120]}")
+
+
+def verify_code(transcribe_endpoint: str, email: str, code: str) -> Account:
+    """Step 2 of the verified signup flow.  On match: server creates the
+    account and returns the api_key.  Raises a specific
+    :class:`CodeError` subclass on every failure mode the UI cares
+    about."""
+    base = _account_base(transcribe_endpoint)
+    url = f"{base}/v1/account/verify-code"
+    try:
+        r = requests.post(
+            url, json={"email": email, "code": code}, timeout=15
+        )
+    except requests.RequestException as e:
+        _log.error("verify_code network error: %s", e)
+        raise CodeError(f"network error: {e}") from e
+
+    if r.status_code == 200:
+        data = r.json()
+        return Account(
+            email=data["email"],
+            api_key=data["api_key"],
+            plan=data.get("plan", "trial"),
+            is_new=bool(data.get("is_new", True)),
+        )
+    if r.status_code == 400:
+        # Two flavours — bad shape ("invalid email") or wrong_code.
+        try:
+            payload = r.json().get("detail")
+            if isinstance(payload, dict) and payload.get("error") == "wrong_code":
+                raise CodeWrong(int(payload.get("attempts_remaining", 0)))
+        except CodeError:
+            raise
+        except Exception:
+            pass
+        raise CodeError(f"bad request: {r.text[:120]}")
+    if r.status_code == 404:
+        raise CodeNotFound(email)
+    if r.status_code == 410:
+        raise CodeExpired()
+    if r.status_code == 429:
+        raise CodeLocked()
+    if r.status_code == 409:
+        raise EmailAlreadyRegistered(email)
+    raise CodeError(f"server error: HTTP {r.status_code} {r.text[:120]}")
 
 
 def info(transcribe_endpoint: str, api_key: str) -> Optional[AccountInfo]:

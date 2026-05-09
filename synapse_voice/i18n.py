@@ -56,17 +56,33 @@ _LANG_DE: dict[str, str] = {
     "onb.btn.next": "Weiter",
     "onb.btn.finish": "Fertig",
 
-    # Account step (v0.3.21)
+    # Account step — email-verified signup (v0.5.0)
     "onb.account.title": "Konto erstellen",
     "onb.account.sub": "Mit deiner E-Mail anmelden — du bekommst 7 Tage kostenlosen Pro-Trial. Kein Passwort, kein Kreditkarten-Zwang, jederzeit kuendbar.",
     "onb.account.email_label": "E-Mail",
     "onb.account.email_placeholder": "du@firma.de",
+    "onb.account.code_label": "Bestaetigungscode aus der E-Mail",
+    "onb.account.btn.request_code": "Bestaetigungscode anfordern",
+    "onb.account.btn.verify": "Bestaetigen + Trial starten",
+    "onb.account.btn.resend": "Code erneut senden",
     "onb.account.btn.signup": "Konto erstellen + Trial starten",
     "onb.account.btn.skip": "Spaeter — erstmal nur lokal nutzen",
+    "onb.account.requesting": "Schicke Code an deine E-Mail…",
+    "onb.account.resending": "Schicke neuen Code…",
+    "onb.account.code_sent": "✉ Code gesendet. Schau in dein Postfach (Spam-Ordner ggf. pruefen).",
+    "onb.account.verifying": "Pruefe Code…",
     "onb.account.signing_up": "Erstelle Konto…",
     "onb.account.success": "✓ Konto erstellt. 7 Tage Pro-Trial laeuft.",
     "onb.account.exists": "Diese E-Mail ist schon registriert. Bei Schluesselverlust: support@subunit.ai",
     "onb.account.invalid": "Bitte eine gueltige E-Mail eingeben.",
+    "onb.account.code_invalid": "Code muss 6-stellig sein.",
+    "onb.account.code_wrong": "Code stimmt nicht — noch {n} Versuche.",
+    "onb.account.code_expired": "Code abgelaufen. Bitte einen neuen anfordern.",
+    "onb.account.code_not_found": "Kein offener Code. Bitte einen neuen anfordern.",
+    "onb.account.locked": "Zu viele Fehlversuche. Bitte einen neuen Code anfordern.",
+    "onb.account.rate_limited": "Bitte noch {n}s warten, bevor du einen neuen Code anforderst.",
+    "onb.account.delivery_failed": "Code konnte nicht versendet werden. Bitte spaeter nochmal versuchen.",
+    "onb.account.network": "Verbindungsfehler. Bist du online?",
     "onb.account.network_error": "Verbindungsfehler. Bist du online?",
     "onb.account.benefit.privacy": "Privacy-by-design — wir loggen keine Inhalte",
     "onb.account.benefit.eu": "Server in Hamburg, DSGVO-konform",
@@ -182,12 +198,28 @@ _LANG_EN: dict[str, str] = {
     "onb.account.sub": "Sign up with your email — you'll get a free 7-day Pro trial. No password, no credit card required, cancel any time.",
     "onb.account.email_label": "Email",
     "onb.account.email_placeholder": "you@company.com",
+    "onb.account.code_label": "Verification code from the email",
+    "onb.account.btn.request_code": "Send verification code",
+    "onb.account.btn.verify": "Verify + start trial",
+    "onb.account.btn.resend": "Resend code",
     "onb.account.btn.signup": "Create account + start trial",
     "onb.account.btn.skip": "Later — just use it locally for now",
+    "onb.account.requesting": "Sending code to your inbox…",
+    "onb.account.resending": "Sending a fresh code…",
+    "onb.account.code_sent": "✉ Code sent. Check your inbox (and your spam folder).",
+    "onb.account.verifying": "Verifying code…",
     "onb.account.signing_up": "Creating account…",
     "onb.account.success": "✓ Account created. 7-day Pro trial active.",
     "onb.account.exists": "This email is already registered. If you lost your key: support@subunit.ai",
     "onb.account.invalid": "Please enter a valid email.",
+    "onb.account.code_invalid": "The code must be 6 digits.",
+    "onb.account.code_wrong": "Wrong code — {n} attempts left.",
+    "onb.account.code_expired": "Code expired. Please request a fresh one.",
+    "onb.account.code_not_found": "No pending code for this email. Please request a new one.",
+    "onb.account.locked": "Too many wrong attempts. Please request a fresh code.",
+    "onb.account.rate_limited": "Please wait {n}s before requesting another code.",
+    "onb.account.delivery_failed": "Couldn't deliver the code. Please try again later.",
+    "onb.account.network": "Connection error. Are you online?",
     "onb.account.network_error": "Connection error. Are you online?",
     "onb.account.benefit.privacy": "Privacy-by-design — we never log content",
     "onb.account.benefit.eu": "Servers in Hamburg, DSGVO-compliant",
@@ -267,13 +299,25 @@ def current_language() -> str:
     return _current
 
 
-def tr(key: str, default: Optional[str] = None) -> str:
+def tr(key: str, default: Optional[str] = None, **kwargs) -> str:
     """Lookup a translation by key. Falls back to the en bundle, then
     to the supplied default, then to the key itself — UI never sees a
-    KeyError. The key's dotted format is convention only, not enforced."""
+    KeyError. The key's dotted format is convention only, not enforced.
+
+    Optional **kwargs are str.format-substituted into the result so
+    callers can write tr("foo", n=3) and the bundle uses "...{n}...".
+    Missing placeholders fall back to the un-substituted string rather
+    than crashing on KeyError."""
     bundle = _BUNDLES.get(_current, _LANG_EN)
     if key in bundle:
-        return bundle[key]
-    if key in _LANG_EN:
-        return _LANG_EN[key]
-    return default if default is not None else key
+        s = bundle[key]
+    elif key in _LANG_EN:
+        s = _LANG_EN[key]
+    else:
+        s = default if default is not None else key
+    if kwargs:
+        try:
+            return s.format(**kwargs)
+        except (KeyError, IndexError, ValueError):
+            return s
+    return s

@@ -1,10 +1,12 @@
 """transcribe.subunit.ai — FastAPI service for Synapse Voice.
 
 Endpoints:
-    POST /v1/transcribe       (audio → text via faster-whisper)
-    POST /v1/cleanup          (raw text → cleaned text via Claude Haiku)
-    POST /v1/account/sign-up  (email → api_key, creates if new)
-    GET  /v1/account/info     (X-API-Key → email, plan, usage stats)
+    POST /v1/transcribe              (audio → text via faster-whisper)
+    POST /v1/cleanup                 (raw text → cleaned text via Claude Haiku)
+    POST /v1/account/request-code    (email → 6-digit code emailed via Resend)
+    POST /v1/account/verify-code     (email + code → api_key, creates account)
+    POST /v1/account/sign-up         (DEPRECATED v0.5.0 — direct, unverified)
+    GET  /v1/account/info            (X-API-Key → email, plan, usage stats)
     GET  /v1/health
     GET  /
 
@@ -30,6 +32,7 @@ from pydantic import BaseModel, EmailStr
 
 import accounts as _accounts
 import cleanup as _cleanup_mod
+import email_send as _email_send
 
 MODEL_NAME = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
 DEVICE = os.environ.get("WHISPER_DEVICE", "auto")  # auto | cpu | cuda
@@ -338,18 +341,15 @@ class SignUpRequest(BaseModel):
 
 @app.post("/v1/account/sign-up")
 async def account_sign_up(req: SignUpRequest):
-    """Self-service onboarding — issue an API key for a NEW email.
+    """DEPRECATED in v0.5.0 — kept for backwards-compat with v0.4.x clients.
 
-    The endpoint is intentionally NOT idempotent. Returning the existing
-    api_key for a known email would let anyone with the email address
-    impersonate the account (mailbox-only "auth"). For lost-key recovery
-    users must contact support; an email-verified recovery flow is on
-    the roadmap.
+    The unverified flow lets anyone register an arbitrary email and get a
+    fresh API key without any proof of mailbox ownership.  v0.5.0 clients
+    use /request-code → /verify-code instead.
     """
     try:
         acct = _accounts.create_account(str(req.email))
     except _accounts.EmailAlreadyRegistered:
-        # Don't echo the api_key. 409 + a hint to use the recovery channel.
         raise HTTPException(
             status_code=409,
             detail=(
@@ -364,6 +364,120 @@ async def account_sign_up(req: SignUpRequest):
             "email": acct["email"],
             "api_key": acct["api_key"],
             "plan": acct["plan"],
+            "is_new": True,
+        }
+    )
+
+
+# ── Email-verified signup (v0.5.0) ─────────────────────────────────────
+
+
+class RequestCodeRequest(BaseModel):
+    email: EmailStr
+
+
+class VerifyCodeRequest(BaseModel):
+    email: EmailStr
+    code: str
+
+
+@app.post("/v1/account/request-code")
+async def account_request_code(req: RequestCodeRequest):
+    """Step 1 of the email-verified signup flow.
+
+    Issues a fresh 6-digit code, stores its hash, and emails the code via
+    Resend.  The plaintext code never leaves this function.
+    """
+    email_str = str(req.email)
+    # Cheap housekeeping — keeps the pending table from growing.
+    try:
+        _accounts.purge_expired_pending_signups()
+    except Exception:
+        pass
+    try:
+        code, ttl = _accounts.request_signup_code(email_str)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except _accounts.EmailAlreadyRegistered:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "email already registered — to recover a lost API key, "
+                "contact support@subunit.ai"
+            ),
+        )
+    except _accounts.SignupCodeRateLimited as e:
+        # 429 + Retry-After lets the client show "try again in Xs" cleanly.
+        return JSONResponse(
+            status_code=429,
+            content={"error": "rate_limited", "retry_after": e.retry_after},
+            headers={"Retry-After": str(e.retry_after)},
+        )
+
+    try:
+        _email_send.send_verification_code(email_str, code)
+    except _email_send.EmailDeliveryError as e:
+        # The code is already stored — but if we couldn't deliver it the
+        # user will never get past step 2.  502 so the client retries.
+        raise HTTPException(status_code=502, detail=f"email delivery failed: {e}")
+
+    return JSONResponse(
+        {
+            "sent": True,
+            "ttl_seconds": ttl,
+            "resend_cooldown_seconds": _accounts.SIGNUP_RESEND_COOLDOWN,
+        }
+    )
+
+
+@app.post("/v1/account/verify-code")
+async def account_verify_code(req: VerifyCodeRequest):
+    """Step 2 of the email-verified signup flow.
+
+    On match: creates the account, returns the api_key + 7-day Pro trial.
+    On mismatch: 400 with `attempts_remaining` so the UI can show a
+    counter; after 5 wrong attempts the row locks until the user hits
+    /request-code again (which resets the counter).
+    """
+    try:
+        acct = _accounts.verify_signup_code(str(req.email), req.code)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except _accounts.SignupCodeNotFound:
+        raise HTTPException(
+            status_code=404,
+            detail="no pending signup for this email — request a code first",
+        )
+    except _accounts.SignupCodeExpired:
+        raise HTTPException(
+            status_code=410,
+            detail="code expired — request a fresh one",
+        )
+    except _accounts.SignupCodeWrong as e:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "wrong_code",
+                "attempts_remaining": e.attempts_remaining,
+            },
+        )
+    except _accounts.SignupCodeLocked:
+        raise HTTPException(
+            status_code=429,
+            detail="too many wrong attempts — request a fresh code",
+        )
+    except _accounts.EmailAlreadyRegistered:
+        raise HTTPException(
+            status_code=409,
+            detail="email already registered while verifying — try /info with the existing key",
+        )
+    return JSONResponse(
+        {
+            "email": acct["email"],
+            "api_key": acct["api_key"],
+            "plan": acct["plan"],
+            "trial_started_at": acct["trial_started_at"],
+            "trial_expires_at": acct["trial_expires_at"],
             "is_new": True,
         }
     )
