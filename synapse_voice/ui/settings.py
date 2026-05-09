@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .. import __version__, autostart
+from .. import __version__, auto_mode as _auto_mode, autostart
 from .. import account as _account_api
 from ..config import Config
 from ..logger import log_file_path
@@ -231,6 +231,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_general_tab(), "General")
         self.tabs.addTab(self._build_transcription_tab(), "Transcription")
         self.tabs.addTab(self._build_vocabulary_tab(), "Vocabulary")
+        self.tabs.addTab(self._build_auto_mode_tab(), "Auto-Mode")
         self.tabs.addTab(self._build_overlay_tab(), "Overlay")
         self.tabs.addTab(self._build_account_tab(), "Account")
         self.tabs.addTab(self._build_about_tab(), "About")
@@ -409,7 +410,8 @@ class SettingsDialog(QDialog):
         self.row_auto_mode = _ToggleRow(
             "Auto-Mode — pick style by active window",
             "ChatGPT/Editor → Prompt · Mail apps → Email · Slack/Discord → Slack · "
-            "Word/Docs → Formal. Falls back to your manual pick if no rule matches.",
+            "Word/Docs → Formal. Falls back to your manual pick if no rule matches. "
+            "Customise rules in the Auto-Mode tab.",
             self.config.cleanup_auto_mode,
         )
         layout.addWidget(self.row_auto_mode)
@@ -703,6 +705,112 @@ class SettingsDialog(QDialog):
                 out.append({"sounds_like": sl, "write_as": wa})
         return out
 
+    # ── Tab: Auto-Mode (custom window→style rules) ─────────────────────────
+
+    def _build_auto_mode_tab(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("tabPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(2, 18, 2, 18)
+        layout.setSpacing(10)
+
+        layout.addWidget(_section_title("Custom rules"))
+        layout.addWidget(_hint(
+            "When Auto-Mode is on (General tab), Synapse Voice picks the "
+            "cleanup style based on the active window. Add your own rules "
+            "below — e.g. window contains \"Notion\" → Prompt. Custom rules "
+            "override the built-in catalogue. Match is case-insensitive "
+            "substring (not regex)."
+        ))
+
+        self.auto_table = QTableWidget()
+        self.auto_table.setColumnCount(2)
+        self.auto_table.setHorizontalHeaderLabels(["Window contains", "Cleanup style"])
+        hdr = self.auto_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.auto_table.verticalHeader().setVisible(False)
+
+        existing = list((self.config.auto_mode_overrides or {}).items())
+        self.auto_table.setRowCount(max(6, len(existing) + 2))
+        for i, (pattern, style) in enumerate(existing):
+            self.auto_table.setItem(i, 0, QTableWidgetItem(pattern))
+            self.auto_table.setCellWidget(i, 1, self._make_style_combo(style))
+        # Pre-fill empty rows with a default combo so the user can pick a
+        # style before typing the pattern (the harvest skips empty patterns).
+        for i in range(len(existing), self.auto_table.rowCount()):
+            self.auto_table.setCellWidget(i, 1, self._make_style_combo("prompt"))
+        layout.addWidget(self.auto_table, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        add_row = QPushButton("Add row")
+        add_row.clicked.connect(self._add_auto_row)
+        btn_row.addWidget(add_row)
+        clear_row = QPushButton("Remove selected")
+        clear_row.clicked.connect(self._remove_auto_row)
+        btn_row.addWidget(clear_row)
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+
+        layout.addSpacing(6)
+        layout.addWidget(_section_title("Built-in rules"))
+        catalog = _auto_mode.catalog()
+        # Group labels by style so the reference list reads compactly.
+        by_style: dict[str, list[str]] = {}
+        for style, label, _ in catalog:
+            by_style.setdefault(style, []).append(label)
+        style_titles = {
+            "prompt": "Prompt", "email": "Email",
+            "slack": "Slack", "formal": "Formal",
+        }
+        lines = []
+        for style in ("prompt", "email", "slack", "formal"):
+            apps = by_style.get(style, [])
+            if apps:
+                lines.append(f"<b>{style_titles[style]}</b> — {', '.join(apps)}")
+        ref = QLabel("<br>".join(lines))
+        ref.setObjectName("dim")
+        ref.setWordWrap(True)
+        ref.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(ref)
+
+        return page
+
+    def _make_style_combo(self, current: str) -> QComboBox:
+        combo = QComboBox()
+        combo.addItem("Prompt", "prompt")
+        combo.addItem("Email", "email")
+        combo.addItem("Slack", "slack")
+        combo.addItem("Formal", "formal")
+        idx = combo.findData(current if current in {"prompt", "email", "slack", "formal"} else "prompt")
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        return combo
+
+    def _add_auto_row(self) -> None:
+        r = self.auto_table.rowCount()
+        self.auto_table.setRowCount(r + 1)
+        self.auto_table.setCellWidget(r, 1, self._make_style_combo("prompt"))
+
+    def _remove_auto_row(self) -> None:
+        row = self.auto_table.currentRow()
+        if row >= 0:
+            self.auto_table.removeRow(row)
+
+    def _harvest_auto_overrides(self) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for r in range(self.auto_table.rowCount()):
+            pat_item = self.auto_table.item(r, 0)
+            pat = (pat_item.text().strip() if pat_item else "")
+            if not pat:
+                continue
+            combo = self.auto_table.cellWidget(r, 1)
+            style = combo.currentData() if isinstance(combo, QComboBox) else "prompt"
+            if style in {"prompt", "email", "slack", "formal"}:
+                out[pat] = style
+        return out
+
     # ── Tab 4: Overlay ─────────────────────────────────────────────────────
 
     def _build_overlay_tab(self) -> QWidget:
@@ -961,6 +1069,8 @@ class SettingsDialog(QDialog):
         config.cleanup_style = self.cleanup_style_combo.currentData() or "prompt"
         if hasattr(self, "row_auto_mode"):
             config.cleanup_auto_mode = self.row_auto_mode.is_on()
+        if hasattr(self, "auto_table"):
+            config.auto_mode_overrides = self._harvest_auto_overrides()
         config.auto_update_check = self.row_auto_update.is_on()
 
         config.subunit_endpoint = (

@@ -114,7 +114,7 @@ def apply_overrides(
     for pat, style in overrides.items():
         if not pat:
             continue
-        if pat.lower() in title_low and style in {"prompt", "email", "slack", "formal", "tidy"}:
+        if pat.lower() in title_low and style in {"prompt", "email", "slack", "formal"}:
             return style, f"custom: {pat[:24]}"
     return detection
 
