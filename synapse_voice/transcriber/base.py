@@ -1,6 +1,8 @@
 """Transcriber dispatch."""
 from __future__ import annotations
 
+import os
+import platform
 from typing import Any, Optional, Protocol
 
 import numpy as np
@@ -18,6 +20,33 @@ class TrialExpiredError(TranscriberError):
 
 class Transcriber(Protocol):
     def transcribe(self, audio: np.ndarray, language: str = "de") -> str: ...
+
+
+def _local_backend() -> str:
+    """Choose the local transcription backend for the current host.
+
+    Returns ``"faster_whisper"`` (the default — fastest, best-supported,
+    requires ctranslate2 wheels) or ``"onnx"`` (Whisper run via raw
+    onnxruntime through ``onnx_asr``).
+
+    The onnx path is needed because ``ctranslate2`` does not ship Windows
+    ARM64 wheels (Surface Pro X / Snapdragon-Surface), so the standard
+    backend silently produces broken bundles there.
+
+    Override with ``SYNAPSE_VOICE_LOCAL_BACKEND={faster_whisper,onnx}`` for
+    diagnostics or to force-test the alternate path on x64.
+    """
+    override = os.environ.get("SYNAPSE_VOICE_LOCAL_BACKEND", "").strip().lower()
+    if override in ("faster_whisper", "onnx"):
+        return override
+    machine = platform.machine().lower()
+    system = platform.system().lower()
+    # Windows-ARM64 → onnx (no ctranslate2 wheel).  Other ARM64 hosts
+    # (Linux, macOS Apple Silicon) DO have ctranslate2 wheels and stay
+    # on the faster-whisper path.
+    if system == "windows" and machine in ("arm64", "aarch64"):
+        return "onnx"
+    return "faster_whisper"
 
 
 # Cache of (cache-key) -> transcriber instance. Crucial for the local backend:
@@ -133,13 +162,23 @@ def get_transcriber(mode: str, config) -> Transcriber:
             cached.initial_prompt = _vocab_prompt(config)
         return cached
     if mode == "local":
-        from .local import LocalTranscriber
+        backend = _local_backend()
+        if backend == "onnx":
+            from .onnx_local import OnnxLocalTranscriber
 
-        inst = LocalTranscriber(
-            model=config.local_model,
-            device=config.local_device,
-            initial_prompt=_vocab_prompt(config),
-        )
+            inst = OnnxLocalTranscriber(
+                model=config.local_model,
+                device=config.local_device,
+                initial_prompt=_vocab_prompt(config),
+            )
+        else:
+            from .local import LocalTranscriber
+
+            inst = LocalTranscriber(
+                model=config.local_model,
+                device=config.local_device,
+                initial_prompt=_vocab_prompt(config),
+            )
     elif mode == "subunit":
         from .subunit import SubunitTranscriber
 

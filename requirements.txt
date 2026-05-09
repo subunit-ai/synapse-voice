@@ -4,5 +4,11 @@ numpy>=1.26
 scipy>=1.12
 pynput>=1.7
 requests>=2.31
-faster-whisper>=1.0
 psutil>=5.9
+# Local transcription backends — split by platform.
+#   x86_64 + Linux/macOS ARM64: faster-whisper (ctranslate2-backed, fastest path).
+#   Windows ARM64: onnx-asr (ctranslate2 has no Win-ARM64 wheel as of 2026Q2,
+#   so we run Whisper via raw onnxruntime instead — the onnx-asr lib pulls
+#   onnxruntime + numpy + huggingface-hub, all of which DO ship Win-ARM64).
+faster-whisper>=1.0; not (sys_platform == "win32" and platform_machine == "ARM64")
+onnx-asr[cpu,hub]>=0.10; sys_platform == "win32" and platform_machine == "ARM64"

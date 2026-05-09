@@ -10,17 +10,47 @@
 #
 # Build (Windows): same command, .exe is produced.
 
+import importlib.util
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 block_cipher = None
 ROOT = Path(SPECPATH).parent
 
-# faster-whisper ships the silero VAD model + tokenizer files as package data —
-# PyInstaller's static analysis misses them, so bundle the whole package data tree.
+
+def _has(pkg: str) -> bool:
+    """True if the package can be imported in the current build env.  We
+    use this to keep the spec architecture-aware: on x64 we ship
+    ctranslate2 + faster-whisper, on Win-ARM64 we ship onnx-asr instead."""
+    return importlib.util.find_spec(pkg) is not None
+
+
 extra_datas = []
-extra_datas += collect_data_files("faster_whisper")
-extra_datas += collect_data_files("tokenizers")
+extra_binaries = []
+
+# ── x64 backend: faster-whisper + ctranslate2 ───────────────────────────
+# ctranslate2 has no Win-ARM64 wheel as of 2026Q2, so faster-whisper is
+# absent on that runner.  collect_data_files would explode → guard.
+if _has("faster_whisper"):
+    extra_datas += collect_data_files("faster_whisper")
+if _has("tokenizers"):
+    extra_datas += collect_data_files("tokenizers")
+if _has("ctranslate2"):
+    extra_binaries += collect_dynamic_libs("ctranslate2")
+
+# ── ARM64 backend: onnx-asr + onnxruntime ───────────────────────────────
+# onnx-asr ships its own VAD + Whisper preprocessor configs as package
+# data; collect them so the bundle has everything for first-run model
+# download (the Whisper ONNX itself is fetched from HF hub on demand).
+if _has("onnx_asr"):
+    extra_datas += collect_data_files("onnx_asr")
+if _has("huggingface_hub"):
+    extra_datas += collect_data_files("huggingface_hub")
+
+# onnxruntime ships native shared libs on every platform we target.
+if _has("onnxruntime"):
+    extra_binaries += collect_dynamic_libs("onnxruntime")
+
 # Brand assets — the icons/ folder must ship with the bundle so the
 # BrandLogo widget + tray icon can find subunit-logo.png at runtime.
 extra_datas.append((str(ROOT / "icons" / "subunit-logo.png"), "icons"))
@@ -34,11 +64,6 @@ extra_datas.append(
 extra_datas.append(
     (str(ROOT / "synapse_voice" / "sounds" / "done.wav"), "synapse_voice/sounds")
 )
-# ctranslate2 + onnxruntime ship native shared libs that aren't picked up unless
-# we explicitly collect them.
-extra_binaries = []
-extra_binaries += collect_dynamic_libs("ctranslate2")
-extra_binaries += collect_dynamic_libs("onnxruntime")
 
 a = Analysis(
     [str(ROOT / "dist-build" / "entrypoint.py")],
@@ -60,6 +85,7 @@ a = Analysis(
         "synapse_voice.updater",
         "synapse_voice.transcriber",
         "synapse_voice.transcriber.local",
+        "synapse_voice.transcriber.onnx_local",
         "synapse_voice.transcriber.cloud",
         "synapse_voice.transcriber.subunit",
         "synapse_voice.ui",
@@ -76,12 +102,16 @@ a = Analysis(
         "synapse_voice.ui.hotkey_capture",
         "synapse_voice.ui.main_window",
         "synapse_voice.ui.widgets",
-        # faster-whisper deps that PyInstaller's static analysis sometimes misses
-        "faster_whisper",
-        "ctranslate2",
+        # Local backend deps — only one of these two paths is installed
+        # per architecture.  PyInstaller emits a warning for the absent
+        # set; that's fine, the actual install handles arch-conditioning.
+        "faster_whisper",       # x64 backend
+        "ctranslate2",          # x64 backend
+        "av",                   # x64 backend
+        "onnx_asr",             # ARM64 backend (Win)
+        # Shared by both
         "tokenizers",
         "huggingface_hub",
-        "av",
         "onnxruntime",
         # pynput backends
         "pynput.keyboard._xorg",

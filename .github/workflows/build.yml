@@ -177,14 +177,42 @@ jobs:
           key: pip-arm64-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
 
       - name: Install Python deps
+        # Use pwsh with explicit error handling.  Previous build silently
+        # produced a 7 MB stub when pip resolution failed (no PyQt6/Whisper
+        # in the bundle), then crashed at runtime.  $ErrorActionPreference
+        # makes pip stderr propagate as a fatal job failure instead.
+        shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw "pip install -r requirements.txt failed" }
           pip install pyinstaller pywin32
+          if ($LASTEXITCODE -ne 0) { throw "pip install pyinstaller pywin32 failed" }
+          # Sanity: the local backend MUST be importable on this arch,
+          # otherwise the bundle will crash at runtime exactly like v0.4.1.
+          python -c "from onnx_asr import load_model; print('onnx-asr OK')"
+          python -c "from PyQt6 import QtCore; print('PyQt6 OK')"
+          python -c "import onnxruntime; print('onnxruntime', onnxruntime.__version__)"
 
       - name: Build PyInstaller bundle
         run: |
           pyinstaller --clean --noconfirm dist-build\synapse-voice.spec
+
+      - name: Smoke test the bundle size
+        # The previous broken ARM build was 7 MB (no PyQt6, no Whisper,
+        # just a Python stub).  A healthy bundle on Win-ARM64 should be
+        # at least ~80 MB once onnxruntime + PyQt6 are bundled.  Hard-fail
+        # below that threshold so we never ship another stub.
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem dist\synapse-voice\synapse-voice.exe
+          if (-not $exe) { throw "synapse-voice.exe missing from PyInstaller output" }
+          $totalBytes = (Get-ChildItem dist\synapse-voice -Recurse -File | Measure-Object Length -Sum).Sum
+          Write-Host "Bundle total size: $totalBytes bytes"
+          if ($totalBytes -lt 50000000) {
+            throw "Bundle suspiciously small ($totalBytes bytes) — Whisper / Qt deps likely missing.  Refusing to ship."
+          }
 
       - name: Zip distribution
         run: |
