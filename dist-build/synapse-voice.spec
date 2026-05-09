@@ -12,7 +12,11 @@
 
 import importlib.util
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+)
 
 block_cipher = None
 ROOT = Path(SPECPATH).parent
@@ -27,29 +31,36 @@ def _has(pkg: str) -> bool:
 
 extra_datas = []
 extra_binaries = []
+extra_hidden = []
 
 # ── x64 backend: faster-whisper + ctranslate2 ───────────────────────────
 # ctranslate2 has no Win-ARM64 wheel as of 2026Q2, so faster-whisper is
 # absent on that runner.  collect_data_files would explode → guard.
 if _has("faster_whisper"):
     extra_datas += collect_data_files("faster_whisper")
+    extra_hidden += collect_submodules("faster_whisper")
 if _has("tokenizers"):
     extra_datas += collect_data_files("tokenizers")
 if _has("ctranslate2"):
     extra_binaries += collect_dynamic_libs("ctranslate2")
 
 # ── ARM64 backend: onnx-asr + onnxruntime ───────────────────────────────
-# onnx-asr ships its own VAD + Whisper preprocessor configs as package
-# data; collect them so the bundle has everything for first-run model
-# download (the Whisper ONNX itself is fetched from HF hub on demand).
+# onnx-asr ships its preprocessor ONNX files + Python source split across
+# adapters.py / loader.py / asr.py / models/.  PyInstaller's static
+# analysis only follows the entrypoint's import graph and easily misses
+# the dynamic loader inside onnx_asr.load_model — collect_submodules
+# enumerates EVERY .py module in the package so the bundle has them all.
 if _has("onnx_asr"):
     extra_datas += collect_data_files("onnx_asr")
+    extra_hidden += collect_submodules("onnx_asr")
 if _has("huggingface_hub"):
     extra_datas += collect_data_files("huggingface_hub")
+    extra_hidden += collect_submodules("huggingface_hub")
 
 # onnxruntime ships native shared libs on every platform we target.
 if _has("onnxruntime"):
     extra_binaries += collect_dynamic_libs("onnxruntime")
+    extra_hidden += collect_submodules("onnxruntime")
 
 # Brand assets — the icons/ folder must ship with the bundle so the
 # BrandLogo widget + tray icon can find subunit-logo.png at runtime.
@@ -113,6 +124,9 @@ a = Analysis(
         "tokenizers",
         "huggingface_hub",
         "onnxruntime",
+        # Auto-discovered submodules from collect_submodules above —
+        # appended at the end so the explicit list above stays readable.
+    ] + extra_hidden + [
         # pynput backends
         "pynput.keyboard._xorg",
         "pynput.keyboard._win32",
