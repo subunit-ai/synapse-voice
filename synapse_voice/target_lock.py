@@ -339,6 +339,14 @@ def _win_paste_keystroke() -> bool:
     keybd_event is deprecated and not reliable on modern Win11 (and gets
     intercepted by some games / per-app input filters). SendInput posts to
     the same input queue real keyboards use.
+
+    The INPUT union MUST include MOUSEINPUT (and HARDWAREINPUT) even though
+    we only use KEYBDINPUT — the OS's cbSize check is based on the full
+    union's size (40 bytes on x64/arm64), and a "shrunken" union sized only
+    for KEYBDINPUT (32 bytes) makes SendInput silently return 0 on
+    Windows-on-ARM x64 emulation.  On native x64 this happened to work by
+    chance because the kernel's parser only reads the KEYBDINPUT bytes
+    when the type is INPUT_KEYBOARD, but that's not guaranteed.
     """
     import ctypes
     from ctypes import wintypes
@@ -350,17 +358,42 @@ def _win_paste_keystroke() -> bool:
     VK_CONTROL = 0x11
     VK_V = 0x56
 
+    # ULONG_PTR is pointer-sized — c_void_p picks the right width on every
+    # arch (8 bytes on x64/arm64, 4 bytes on x86).
+    ULONG_PTR = ctypes.c_void_p
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", wintypes.LONG),
+            ("dy", wintypes.LONG),
+            ("mouseData", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ULONG_PTR),
+        ]
+
     class KEYBDINPUT(ctypes.Structure):
         _fields_ = [
             ("wVk", wintypes.WORD),
             ("wScan", wintypes.WORD),
             ("dwFlags", wintypes.DWORD),
             ("time", wintypes.DWORD),
-            ("dwExtraInfo", ctypes.c_void_p),
+            ("dwExtraInfo", ULONG_PTR),
+        ]
+
+    class HARDWAREINPUT(ctypes.Structure):
+        _fields_ = [
+            ("uMsg", wintypes.DWORD),
+            ("wParamL", wintypes.WORD),
+            ("wParamH", wintypes.WORD),
         ]
 
     class _INPUTunion(ctypes.Union):
-        _fields_ = [("ki", KEYBDINPUT)]
+        _fields_ = [
+            ("mi", MOUSEINPUT),
+            ("ki", KEYBDINPUT),
+            ("hi", HARDWAREINPUT),
+        ]
 
     class INPUT(ctypes.Structure):
         _anonymous_ = ("u",)
@@ -388,7 +421,19 @@ def _win_paste_keystroke() -> bool:
         make(VK_V, True),
         make(VK_CONTROL, True),
     )
-    sent = user32.SendInput(4, seq, ctypes.sizeof(INPUT))
+    cb = ctypes.sizeof(INPUT)
+    sent = user32.SendInput(4, seq, cb)
+    if sent != 4:
+        # GetLastError straight from kernel32 — ctypes.get_last_error() only
+        # works if the DLL was opened with use_last_error=True (we use
+        # plain windll, so it'd just return 0).  Common error codes we'd
+        # see here: 5 = ERROR_ACCESS_DENIED (UIPI: low-IL → high-IL),
+        # 87 = ERROR_INVALID_PARAMETER (cbSize wrong / struct corrupt).
+        try:
+            err = ctypes.windll.kernel32.GetLastError()
+        except Exception:
+            err = -1
+        _log_paste(f"SendInput sent={sent}/4 cbSize={cb} lastError={err}")
     return sent == 4
 
 

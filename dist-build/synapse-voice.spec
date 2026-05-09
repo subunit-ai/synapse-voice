@@ -16,7 +16,16 @@ from PyInstaller.utils.hooks import (
     collect_data_files,
     collect_dynamic_libs,
     collect_submodules,
+    copy_metadata,
 )
+
+
+def _safe_metadata(pkg: str) -> list:
+    """Return copy_metadata() output if the package is installed, else []."""
+    try:
+        return copy_metadata(pkg)
+    except Exception:
+        return []
 
 block_cipher = None
 ROOT = Path(SPECPATH).parent
@@ -53,14 +62,25 @@ if _has("ctranslate2"):
 if _has("onnx_asr"):
     extra_datas += collect_data_files("onnx_asr")
     extra_hidden += collect_submodules("onnx_asr")
+    # onnx-asr does importlib.metadata.version("onnx-asr") in its __init__,
+    # which raises PackageNotFoundError unless the *.dist-info dir ships too.
+    # collect_data_files only grabs runtime files, NOT install metadata.
+    extra_datas += _safe_metadata("onnx-asr")
 if _has("huggingface_hub"):
     extra_datas += collect_data_files("huggingface_hub")
     extra_hidden += collect_submodules("huggingface_hub")
+    extra_datas += _safe_metadata("huggingface_hub")
 
 # onnxruntime ships native shared libs on every platform we target.
 if _has("onnxruntime"):
     extra_binaries += collect_dynamic_libs("onnxruntime")
     extra_hidden += collect_submodules("onnxruntime")
+    extra_datas += _safe_metadata("onnxruntime")
+
+# Other packages that may read their own version via importlib.metadata
+# at import time — bundle the dist-info so PackageNotFoundError doesn't fire.
+for _meta_pkg in ("tokenizers", "numpy", "soundfile", "librosa"):
+    extra_datas += _safe_metadata(_meta_pkg)
 
 # Brand assets — the icons/ folder must ship with the bundle so the
 # BrandLogo widget + tray icon can find subunit-logo.png at runtime.
