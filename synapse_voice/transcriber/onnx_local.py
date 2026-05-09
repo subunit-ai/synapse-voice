@@ -73,12 +73,27 @@ class OnnxLocalTranscriber:
     def _load(self):
         if self._model is not None:
             return self._model
+        # Catch *anything* on import — not just ImportError.  An ARM64
+        # bundle can technically include onnx_asr's .py source but still
+        # fail at import time if a transitive dep (e.g. onnxruntime
+        # provider DLL) is missing or the wrong arch.  Logging the real
+        # exception lets us debug from the user's log instead of seeing
+        # the same generic "not installed" message regardless of cause.
         try:
             import onnx_asr  # type: ignore[import-not-found]
         except ImportError as e:
+            from ..logger import get as _get_logger
+            _get_logger(__name__).error("onnx_asr ImportError: %s", e)
             raise TranscriberError(
-                "onnx-asr not installed — required for local transcription "
-                "on Windows-ARM64.  Install via `pip install onnx-asr[cpu,hub]`."
+                f"onnx-asr import failed (ImportError): {e}"
+            ) from e
+        except BaseException as e:
+            from ..logger import get as _get_logger
+            _get_logger(__name__).error(
+                "onnx_asr load failed (%s): %s", type(e).__name__, e
+            )
+            raise TranscriberError(
+                f"onnx-asr load failed ({type(e).__name__}): {e}"
             ) from e
 
         repo = _resolve_repo(self.model_name)
@@ -88,6 +103,11 @@ class OnnxLocalTranscriber:
         try:
             self._model = onnx_asr.load_model(repo)
         except Exception as e:  # noqa: BLE001
+            from ..logger import get as _get_logger
+            _get_logger(__name__).error(
+                "onnx_asr.load_model(%r) failed (%s): %s",
+                repo, type(e).__name__, e,
+            )
             raise TranscriberError(
                 f"Failed to load Whisper ONNX model {repo!r}: {e}"
             ) from e

@@ -233,7 +233,7 @@ class BigModeSwitch(QWidget):
         ]):
             half_x = rect.x() + i * half_w
             is_active = (i == 0 and self._is_local) or (i == 1 and not self._is_local)
-            p.setPen(NIGHT if is_active else QColor(WHITE_DIM))
+            p.setPen(QColor(NIGHT) if is_active else QColor(WHITE_DIM))
             f_icon = QFont()
             f_icon.setPointSize(20)
             p.setFont(f_icon)
@@ -248,7 +248,7 @@ class BigModeSwitch(QWidget):
                 int(Qt.AlignmentFlag.AlignCenter),
                 big,
             )
-            p.setPen(NIGHT if is_active else QColor(WHITE_DIM))
+            p.setPen(QColor(NIGHT) if is_active else QColor(WHITE_DIM))
             p.setFont(f_sub)
             p.drawText(
                 QRect(int(half_x), rect.y() + 68, int(half_w), 24),

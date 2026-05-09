@@ -12,9 +12,11 @@ from typing import Callable, Optional
 
 from PyQt6.QtCore import (
     QEasingCurve,
+    QObject,
     QPropertyAnimation,
     QSize,
     Qt,
+    QThread,
     QTimer,
     pyqtProperty,
     pyqtSignal,
