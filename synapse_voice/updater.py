@@ -126,17 +126,23 @@ def _pick_installer_asset(assets: list) -> tuple[Optional[str], Optional[str]]:
 
     Windows: SynapseVoice-Setup-X.Y.Z.exe (NSIS installer — handles the
         running-process kill + reinstall + relaunch).
+    macOS:   Sonar-X.Y.Z-arm64.dmg (mountable disk image; we open it
+        and let the user drag to /Applications — replacing a running .app
+        from inside itself is fragile).
     Linux:   SynapseVoice-x86_64.AppImage (self-contained binary; we
         replace the running file in-place + re-exec).
     """
     is_win = sys.platform == "win32"
+    is_mac = sys.platform == "darwin"
     for a in assets:
         name = (a.get("name") or "").strip()
         url = a.get("browser_download_url") or ""
         lower = name.lower()
         if is_win and lower.endswith(".exe") and "setup" in lower:
             return url, name
-        if (not is_win) and lower.endswith(".appimage"):
+        if is_mac and lower.endswith(".dmg"):
+            return url, name
+        if (not is_win) and (not is_mac) and lower.endswith(".appimage"):
             return url, name
     return None, None
 
@@ -333,6 +339,15 @@ def launch_installer_and_quit(installer: Path) -> None:
                 close_fds=True,
                 creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
             )
+        return
+    if sys.platform == "darwin":
+        # macOS: open the .dmg in Finder.  Auto-mounting + dragging the
+        # .app into /Applications is what every Mac user expects, and it
+        # sidesteps the "replace the running .app from inside itself"
+        # problem (which is fragile — copying onto a busy code-signed
+        # bundle on macOS often fails partway through).
+        _log.info("Opening .dmg in Finder: %s", installer)
+        subprocess.Popen(["open", str(installer)], close_fds=True)
         return
     # Linux: AppImage replace-and-restart. Caller is responsible for
     # putting the new file into place — we just chmod + spawn.

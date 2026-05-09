@@ -11,6 +11,7 @@
 # Build (Windows): same command, .exe is produced.
 
 import importlib.util
+import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import (
     collect_data_files,
@@ -29,6 +30,20 @@ def _safe_metadata(pkg: str) -> list:
 
 block_cipher = None
 ROOT = Path(SPECPATH).parent
+
+
+def _read_version() -> str:
+    """Pull __version__ from the package __init__ at spec-eval time.
+    Avoids drifting between `synapse_voice/__init__.py` and the
+    Info.plist version PyInstaller writes into Sonar.app on macOS."""
+    init_py = ROOT / "synapse_voice" / "__init__.py"
+    for line in init_py.read_text().splitlines():
+        if line.startswith("__version__"):
+            return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return "0.0.0"
+
+
+_VERSION = _read_version()
 
 
 def _has(pkg: str) -> bool:
@@ -169,6 +184,17 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# Platform-specific icon: .ico on Windows, .icns on macOS, none on Linux
+# (PyInstaller refuses to embed cross-format icons — passing the .ico on
+# macOS would error rather than fall back gracefully).
+if sys.platform == "win32":
+    _icon = str(ROOT / "icons" / "subunit-logo.ico")
+elif sys.platform == "darwin":
+    _icns_path = ROOT / "icons" / "subunit-logo.icns"
+    _icon = str(_icns_path) if _icns_path.exists() else None
+else:
+    _icon = None
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -185,11 +211,11 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    # version-info.txt is Windows-only (PE VERSIONINFO resource); PyInstaller
+    # ignores it on other platforms but errors if the file is missing — keep
+    # the path set unconditionally.
     version=str(ROOT / "dist-build" / "version-info.txt"),
-    # PyInstaller's Windows-icon embedder expects a real .ico (or ships .png
-    # only when Pillow is installed). We pre-generate the .ico so neither
-    # Pillow nor a runtime conversion is needed in CI.
-    icon=str(ROOT / "icons" / "subunit-logo.ico"),
+    icon=_icon,
 )
 
 coll = COLLECT(
@@ -202,3 +228,33 @@ coll = COLLECT(
     upx_exclude=[],
     name="synapse-voice",
 )
+
+# macOS: wrap the COLLECT output in a proper .app bundle so Finder treats
+# Sonar as a single launchable application instead of a directory of files.
+# Info.plist keys serve double duty: NSMicrophoneUsageDescription is
+# REQUIRED by macOS TCC — first time the app accesses the mic, this string
+# shows in the permission dialog (no string ⇒ macOS denies the call
+# silently and the app can't record).  NSAppleEventsUsageDescription is
+# needed for the osascript-driven autopaste path in target_lock.py.
+if sys.platform == "darwin":
+    app = BUNDLE(
+        coll,
+        name="Sonar.app",
+        icon=_icon,
+        bundle_identifier="ai.subunit.sonar",
+        version=_VERSION,
+        info_plist={
+            "CFBundleShortVersionString": _VERSION,
+            "CFBundleVersion": _VERSION,
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "11.0",
+            "NSMicrophoneUsageDescription":
+                "Sonar uses your microphone to record audio for transcription.",
+            "NSAppleEventsUsageDescription":
+                "Sonar uses Apple Events to paste transcribed text into the "
+                "currently focused application.",
+            # We're a tray-only app — LSUIElement hides the Dock icon so
+            # Sonar lives in the menubar without cluttering the Dock.
+            "LSUIElement": True,
+        },
+    )

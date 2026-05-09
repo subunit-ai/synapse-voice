@@ -60,6 +60,26 @@ def capture_active_window() -> WindowTarget | None:
             return WindowTarget(window_id=str(hwnd), title=buf.value, platform="win32")
         except Exception:
             return None
+    if sys.platform == "darwin":
+        # macOS doesn't expose foreground-window HWNDs the same way; ask
+        # the System Events scripting bridge for the frontmost app + its
+        # active window title.  AppleScript via osascript works without
+        # extra permissions for the *name* (Accessibility prompt only kicks
+        # in when we later send keystrokes — handled in paste_keystroke()).
+        try:
+            script = (
+                'tell application "System Events" to set frontApp to '
+                'name of first application process whose frontmost is true'
+            )
+            name = subprocess.check_output(
+                ["osascript", "-e", script], text=True, timeout=2
+            ).strip()
+            # Skip our own process as paste target.
+            if name in ("Sonar", "synapse-voice", "Python"):
+                return None
+            return WindowTarget(window_id=name, title=name, platform="darwin")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+            return None
     return None
 
 
@@ -79,6 +99,20 @@ def focus_window(target: WindowTarget) -> bool:
         try:
             return _win_focus(int(target.window_id))
         except Exception:
+            return False
+    if target.platform == "darwin":
+        # `tell application "<name>" to activate` brings it to the front.
+        # Quote the name so apps with spaces (e.g. "Visual Studio Code")
+        # work; AppleScript single-quotes don't escape, double-quotes do.
+        try:
+            name = target.window_id.replace('"', '\\"')
+            script = f'tell application "{name}" to activate'
+            subprocess.run(
+                ["osascript", "-e", script], check=True, timeout=2
+            )
+            time.sleep(0.1)  # let the front-most-change settle
+            return True
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
             return False
     return False
 
@@ -175,6 +209,15 @@ def set_clipboard(text: str) -> bool:
         return False
     if sys.platform == "win32":
         return _win_set_clipboard(text)
+    if sys.platform == "darwin":
+        # pbcopy ships in /usr/bin on every macOS install since 10.0.
+        try:
+            p = subprocess.run(
+                ["pbcopy"], input=text.encode("utf-8"), check=False, timeout=2
+            )
+            return p.returncode == 0
+        except (subprocess.TimeoutExpired, OSError):
+            return False
     return False
 
 
@@ -207,6 +250,16 @@ def get_clipboard() -> Optional[str]:
         return None
     if sys.platform == "win32":
         return _win_get_clipboard()
+    if sys.platform == "darwin":
+        try:
+            p = subprocess.run(
+                ["pbpaste"], capture_output=True, check=False, timeout=2
+            )
+            if p.returncode == 0:
+                return p.stdout.decode("utf-8", errors="replace")
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        return None
     return None
 
 
@@ -330,6 +383,24 @@ def paste_keystroke() -> bool:
             return False
     if sys.platform == "win32":
         return _win_paste_keystroke()
+    if sys.platform == "darwin":
+        # macOS uses Cmd+V, not Ctrl+V.  Easiest path: System Events
+        # keystroke via osascript.  Requires Accessibility permission for
+        # Sonar, which the user grants once in System Settings → Privacy &
+        # Security → Accessibility.  Without it, this returns 0 success
+        # and we fall back to clipboard-only mode.
+        try:
+            script = (
+                'tell application "System Events" to keystroke "v" '
+                'using command down'
+            )
+            p = subprocess.run(
+                ["osascript", "-e", script],
+                check=False, capture_output=True, timeout=3,
+            )
+            return p.returncode == 0
+        except (subprocess.TimeoutExpired, OSError):
+            return False
     return False
 
 
