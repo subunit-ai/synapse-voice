@@ -76,6 +76,12 @@ class Config:
     cleanup_auto_mode: bool = False
     auto_mode_overrides: dict = field(default_factory=dict)
 
+    # v0.3.29: Subunit Suite — Voice → Synapse Knowledge Base bridge.
+    # When on, every transcript is POSTed to /v1/synapse/save after
+    # cleanup, so it shows up in your Synapse semantic-search index.
+    # Off by default; opt-in via Settings → Account.
+    synapse_save_enabled: bool = False
+
     # v0.3.0: Recording mode. Default = hold (Push-to-Talk) since TJ
     # confirmed Voicely's default works better — press-and-hold maps
     # naturally to "I'm dictating right now".

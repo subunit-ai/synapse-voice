@@ -923,6 +923,19 @@ class SettingsDialog(QDialog):
             "No password yet (coming in a future update)."
         ))
 
+        # v0.3.29 — Subunit Suite: Voice → Synapse Knowledge Base bridge
+        layout.addSpacing(12)
+        layout.addWidget(_section_title("Subunit Suite"))
+        self.row_synapse_save = _ToggleRow(
+            "Save transcripts to Synapse Knowledge Base",
+            "Every transcript is sent to your private Synapse collection right "
+            "after cleanup. Turns Voice dictations into long-term, semantically "
+            "searchable memory across the Subunit suite. Requires Pro / trial; "
+            "your Subunit API key authenticates the call.",
+            self.config.synapse_save_enabled,
+        )
+        layout.addWidget(self.row_synapse_save)
+
         layout.addStretch(1)
         self._refresh_account_status()
         return page
@@ -1071,6 +1084,8 @@ class SettingsDialog(QDialog):
             config.cleanup_auto_mode = self.row_auto_mode.is_on()
         if hasattr(self, "auto_table"):
             config.auto_mode_overrides = self._harvest_auto_overrides()
+        if hasattr(self, "row_synapse_save"):
+            config.synapse_save_enabled = self.row_synapse_save.is_on()
         config.auto_update_check = self.row_auto_update.is_on()
 
         config.subunit_endpoint = (

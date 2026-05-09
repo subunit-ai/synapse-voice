@@ -235,6 +235,101 @@ async def cleanup_endpoint(
     return JSONResponse({"text": cleaned, "style": req.style})
 
 
+# ── Subunit Suite Integration: Voice → Synapse Knowledge Base ─────────────
+
+import hashlib
+import urllib.request
+import urllib.error
+import json as _json
+
+# Memory-agent inside the Subunit docker network. Internal — never
+# reachable from outside this container.
+SYNAPSE_INGEST_URL = os.environ.get(
+    "SYNAPSE_INGEST_URL", "http://memory-agent:8001/ingest"
+)
+SYNAPSE_MAX_CHARS = 16_000  # ~3000 tokens — guards against accidental dumps
+
+
+class SynapseSaveRequest(BaseModel):
+    text: str
+    # Optional context for richer search results in Synapse.
+    window_title: str | None = None
+    cleanup_style: str | None = None
+    language: str | None = None
+    transcribed_at: int | None = None
+
+
+def _synapse_collection_for(account: dict) -> str:
+    """Per-user collection name: deterministic, no PII in the name."""
+    api_key = account.get("api_key", "")
+    h = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+    return f"svoice-{h}"
+
+
+@app.post("/v1/synapse/save")
+async def synapse_save(
+    req: SynapseSaveRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    """Voice → Synapse bridge.
+
+    Forwards the transcript into the user's per-account Synapse
+    collection on the internal memory-agent service. The user explicitly
+    opts in via the Settings toggle — no transcript leaves the box
+    unless this endpoint was called.
+
+    Returns 204 on success (no content), 401 on bad key, 402 on expired
+    trial, 502 if the upstream Synapse service is down.
+    """
+    caller = _resolve_caller(x_api_key)
+    if caller is None:
+        # Operator key cannot save — they have no per-user collection.
+        raise HTTPException(status_code=400, detail="account-scoped endpoint")
+    _require_active_access(caller)
+
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="empty text")
+    if len(text) > SYNAPSE_MAX_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"text too long ({len(text)} chars; max {SYNAPSE_MAX_CHARS})",
+        )
+
+    payload = {
+        "text": text,
+        "source": "synapse-voice",
+        "category": "synapse-voice",
+        "metadata": {
+            "collection": _synapse_collection_for(caller),
+            "account_email": caller.get("email", ""),
+            "window_title": (req.window_title or "")[:200],
+            "cleanup_style": req.cleanup_style or "",
+            "language": req.language or "",
+            "transcribed_at": req.transcribed_at or int(time.time()),
+        },
+    }
+
+    try:
+        request = urllib.request.Request(
+            SYNAPSE_INGEST_URL,
+            data=_json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=8) as r:
+            r.read()  # drain
+    except urllib.error.URLError as e:
+        raise HTTPException(status_code=502, detail=f"synapse upstream: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    return JSONResponse(
+        {"saved": True, "collection": payload["metadata"]["collection"]},
+        status_code=200,
+    )
+
+
 # ── Account ────────────────────────────────────────────────────────────────
 
 class SignUpRequest(BaseModel):

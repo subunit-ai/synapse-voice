@@ -140,6 +140,15 @@ class TranscribeWorker(QObject):
                 from .transcriber.base import apply_vocab_replace
 
                 text = apply_vocab_replace(text, self._config)
+            # v0.3.29 Subunit Suite — Voice → Synapse bridge.  Best-effort,
+            # never blocks the paste path.  Runs after vocab so the saved
+            # version matches what gets pasted.
+            if (
+                text
+                and self._config.synapse_save_enabled
+                and self._config.subunit_api_key
+            ):
+                self._save_to_synapse(text)
             self.finished.emit(text)
         except TranscriberError as e:
             _log.error("Transcribe failed (mode=%s): %s", self._mode, e)
@@ -147,6 +156,50 @@ class TranscribeWorker(QObject):
         except Exception as e:  # surface unexpected backend errors instead of crashing
             _log.exception("Unexpected transcribe error (mode=%s)", self._mode)
             self.failed.emit(f"{type(e).__name__}: {e}")
+
+    def _save_to_synapse(self, text: str) -> None:
+        """Best-effort POST of the final transcript to /v1/synapse/save.
+
+        Errors are logged but never re-raised — the user's paste-flow
+        is the primary path and must never wait on or be aborted by
+        the Synapse bridge.
+        """
+        import json
+        import time
+        import urllib.parse
+        import urllib.request
+
+        # Derive /v1/synapse/save from the configured /v1/transcribe URL.
+        endpoint = (self._config.subunit_endpoint or "").rstrip("/")
+        if endpoint.endswith("/v1/transcribe"):
+            save_url = endpoint[: -len("/v1/transcribe")] + "/v1/synapse/save"
+        else:
+            parsed = urllib.parse.urlparse(endpoint)
+            base = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme else endpoint
+            save_url = base.rstrip("/") + "/v1/synapse/save"
+
+        payload = {
+            "text": text,
+            "window_title": (self._window_title or "")[:200],
+            "cleanup_style": self._config.cleanup_style or "",
+            "language": self._config.language or "",
+            "transcribed_at": int(time.time()),
+        }
+        try:
+            req = urllib.request.Request(
+                save_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "X-API-Key": self._config.subunit_api_key,
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=4) as r:
+                r.read()
+            _log.info("Synapse: saved transcript (%d chars)", len(text))
+        except Exception as e:
+            _log.warning("Synapse save failed (non-fatal): %s", e)
 
 
 class SynapseVoiceApp(QObject):
