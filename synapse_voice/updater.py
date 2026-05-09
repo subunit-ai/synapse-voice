@@ -143,8 +143,10 @@ def _pick_installer_asset(assets: list) -> tuple[Optional[str], Optional[str]]:
 
 _ALLOWED_DL_HOSTS = (
     "github.com",
-    "objects.githubusercontent.com",  # GitHub Releases CDN
-    "github-releases.githubusercontent.com",
+    "objects.githubusercontent.com",         # legacy GitHub Releases CDN
+    "github-releases.githubusercontent.com", # legacy alias
+    "release-assets.githubusercontent.com",  # current presigned-asset CDN (2025+)
+    "subunit.ai",                            # our own mirror at /dl/
 )
 
 
