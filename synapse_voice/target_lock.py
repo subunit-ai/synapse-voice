@@ -525,16 +525,39 @@ def _win_paste_attached(hwnd: int, title: str) -> tuple[bool, str]:
             f"focused={focused} class={focused_class}"
         )
 
-        # Strategy 1: SendInput Ctrl+V — reliable for Electron / Chrome /
-        # Office under attachment. Won't fire keystrokes when sent==0.
-        if _win_paste_keystroke():
-            _log_paste("strategy SendInput → True")
-            pasted = True
+        # Choose strategy order based on the focused window class. Chromium-
+        # based browsers (Chrome / Edge / Brave / Opera) and Firefox have a
+        # single top-level HWND that receives keystrokes and forwards them
+        # to a separate renderer process.  Under Win-on-ARM x64 emulation,
+        # SendInput's synthetic Ctrl+V doesn't update the *renderer-side*
+        # GetKeyState(VK_CONTROL), so the renderer sees plain "v" instead
+        # of paste — and the keystroke ends up typed as a literal v.
+        # WM_PASTE on the outer HWND bypasses keystroke routing entirely:
+        # Chromium's RenderWidgetHostViewWin::WindowProc handles it by
+        # calling delegate->Paste() directly, regardless of modifier state.
+        # That's also a clean fast path on x64, so we prefer it for
+        # browsers everywhere.
+        is_browser = _is_browser_class(focused_class)
 
-        # Strategy 2: SendMessageTimeout(WM_PASTE) on the focused descendant.
-        if not pasted and focused and _win_send_paste(focused):
-            _log_paste(f"strategy WM_PASTE focused={focused} → True")
-            pasted = True
+        # Strategy A: WM_PASTE on outer HWND (browsers) — direct paste
+        # command, no modifier-state dependency.
+        # Strategy B: SendInput Ctrl+V — reliable for Electron / Office /
+        # any classic Edit control on x64.
+        # We try the right one first based on the target's class.
+        if is_browser:
+            if focused and _win_send_paste(focused):
+                _log_paste(f"strategy WM_PASTE focused={focused} (browser) → True")
+                pasted = True
+            elif _win_paste_keystroke():
+                _log_paste("strategy SendInput (browser fallback) → True")
+                pasted = True
+        else:
+            if _win_paste_keystroke():
+                _log_paste("strategy SendInput → True")
+                pasted = True
+            elif focused and _win_send_paste(focused):
+                _log_paste(f"strategy WM_PASTE focused={focused} → True")
+                pasted = True
 
         # Strategy 3: Walk descendants for any Edit-like control and try
         # WM_PASTE on each. Catches apps where the focused HWND isn't the
@@ -561,6 +584,25 @@ def _win_paste_attached(hwnd: int, title: str) -> tuple[bool, str]:
         return True, "pasted"
     _log_paste("all strategies failed → clipboard only")
     return True, "clipboard"
+
+
+def _is_browser_class(cls: str) -> bool:
+    """True for top-level HWND classes that belong to browsers whose paste
+    target lives in a separate renderer process (so synthetic Ctrl+V via
+    SendInput is unreliable, but WM_PASTE on the outer HWND works).
+
+    Covered:
+      * `Chrome_WidgetWin_1` / `Chrome_WidgetWin_0` — Chrome, Edge, Brave,
+        Opera, Vivaldi, all other Chromium forks.
+      * `MozillaWindowClass` — Firefox + Thunderbird (Gecko-based).
+    """
+    if not cls:
+        return False
+    if cls.startswith("Chrome_WidgetWin"):
+        return True
+    if cls == "MozillaWindowClass":
+        return True
+    return False
 
 
 def _win_class_name(hwnd: int) -> str:
