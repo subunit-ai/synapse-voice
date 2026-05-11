@@ -4,11 +4,13 @@ Linux: xdotool. Windows: ctypes user32 (Phase 1 = Linux-first; Windows TODO at p
 """
 from __future__ import annotations
 
+import platform as _platform
 import shutil
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -20,6 +22,21 @@ class WindowTarget:
 
 def _have(cmd: str) -> bool:
     return shutil.which(cmd) is not None
+
+
+def _is_win_arm() -> bool:
+    """True on Windows-on-ARM hosts (Snapdragon X / Surface Pro X).
+
+    Native-ARM64 Sonar running against x64-emulated targets (Chrome,
+    most other apps that don't ship ARM-native builds) has a different
+    paste-keystroke story than native-x64: synthetic Ctrl+V's modifier
+    state doesn't always propagate through the emulator's input-routing,
+    so we have to prefer SendInput over WM_PASTE on this arch.
+    """
+    if sys.platform != "win32":
+        return False
+    m = _platform.machine().lower()
+    return m in ("arm64", "aarch64")
 
 
 def capture_active_window() -> WindowTarget | None:
@@ -208,7 +225,13 @@ def set_clipboard(text: str) -> bool:
             return p.returncode == 0
         return False
     if sys.platform == "win32":
-        return _win_set_clipboard(text)
+        # Use Qt's clipboard instead of raw Win32 ctypes.  The previous
+        # ctypes path worked on x64 but stops overwriting on Win-on-ARM
+        # after the first call — likely because the emulated SetClipboardData
+        # handle isn't released to the system the same way native-ARM expects.
+        # QGuiApplication.clipboard() routes through Qt's well-tested platform
+        # plugin that handles arch quirks correctly.
+        return _qt_set_clipboard(text)
     if sys.platform == "darwin":
         # pbcopy ships in /usr/bin on every macOS install since 10.0.
         try:
@@ -249,7 +272,7 @@ def get_clipboard() -> Optional[str]:
                 pass
         return None
     if sys.platform == "win32":
-        return _win_get_clipboard()
+        return _qt_get_clipboard()
     if sys.platform == "darwin":
         try:
             p = subprocess.run(
@@ -261,6 +284,54 @@ def get_clipboard() -> Optional[str]:
             pass
         return None
     return None
+
+
+def _qt_set_clipboard(text: str) -> bool:
+    """Qt-routed clipboard set.  Falls back to the ctypes path only if
+    Qt's QGuiApplication isn't initialised (e.g. test scaffolding).
+
+    Why Qt instead of raw Win32:
+      * Qt's platform plugin handles the WM_RENDERFORMAT / WM_DESTROYCLIPBOARD
+        round-trip for us, which the bare ctypes path skips.  On Win-on-ARM
+        x64-emulation the missing handshake was leaving stale clipboard
+        contents after the first set (TJ-report, Erik on Surface Pro 2024:
+        "Nach der ersten Transkription bleibt die Zwischenablage immer bei
+        der ersten Aufnahme").
+      * Qt sets BOTH CF_UNICODETEXT and CF_TEXT and announces the format
+        list correctly so Chromium / Office / Notepad all pick it up.
+    """
+    try:
+        from PyQt6.QtGui import QGuiApplication
+
+        app = QGuiApplication.instance()
+        if app is None:
+            return _win_set_clipboard(text)
+        cb = app.clipboard()
+        if cb is None:
+            return _win_set_clipboard(text)
+        cb.setText(text)
+        return True
+    except Exception:
+        # Last-resort: try the ctypes path so we don't silently drop the
+        # transcription if Qt's clipboard subsystem is unhappy.
+        return _win_set_clipboard(text)
+
+
+def _qt_get_clipboard() -> Optional[str]:
+    """Qt-routed clipboard read.  Symmetric to _qt_set_clipboard."""
+    try:
+        from PyQt6.QtGui import QGuiApplication
+
+        app = QGuiApplication.instance()
+        if app is None:
+            return _win_get_clipboard()
+        cb = app.clipboard()
+        if cb is None:
+            return _win_get_clipboard()
+        text = cb.text()
+        return text if text else None
+    except Exception:
+        return _win_get_clipboard()
 
 
 def _win_get_clipboard() -> Optional[str]:
@@ -596,36 +667,52 @@ def _win_paste_attached(hwnd: int, title: str) -> tuple[bool, str]:
             f"focused={focused} class={focused_class}"
         )
 
-        # Choose strategy order based on the focused window class. Chromium-
-        # based browsers (Chrome / Edge / Brave / Opera) and Firefox have a
-        # single top-level HWND that receives keystrokes and forwards them
-        # to a separate renderer process.  Under Win-on-ARM x64 emulation,
-        # SendInput's synthetic Ctrl+V doesn't update the *renderer-side*
-        # GetKeyState(VK_CONTROL), so the renderer sees plain "v" instead
-        # of paste — and the keystroke ends up typed as a literal v.
-        # WM_PASTE on the outer HWND bypasses keystroke routing entirely:
-        # Chromium's RenderWidgetHostViewWin::WindowProc handles it by
-        # calling delegate->Paste() directly, regardless of modifier state.
-        # That's also a clean fast path on x64, so we prefer it for
-        # browsers everywhere.
+        # Choose strategy order based on (a) the focused window class and
+        # (b) the host architecture.  Chromium-based browsers (Chrome /
+        # Edge / Brave / Opera) and Firefox have a single top-level HWND
+        # that receives keystrokes and forwards them to a separate
+        # renderer process.
+        #
+        # Win-x64: WM_PASTE on the outer HWND works — Chromium's
+        # RenderWidgetHostViewWin::WindowProc handles it by calling
+        # delegate->Paste() directly.  Prefer it (no synthetic modifier
+        # state to propagate).
+        #
+        # Win-on-ARM: Chromium ships as x64-emulated.  WM_PASTE *delivery*
+        # succeeds (SendMessageTimeout returns non-zero) but the renderer
+        # process doesn't always pick up the paste command across the
+        # emulation boundary — TJ-report from Erik's Surface Pro X 2024:
+        # "Text landet in der Zwischenablage, wird aber nicht automatisch
+        # ins aktive Fenster eingefügt".  On this arch, fall back to
+        # SendInput FIRST since it does work for Chrome-on-emulation if
+        # the cbSize is correct (which v0.5.3 already fixed).
         is_browser = _is_browser_class(focused_class)
+        is_win_arm = _is_win_arm()
 
-        # Strategy A: WM_PASTE on outer HWND (browsers) — direct paste
-        # command, no modifier-state dependency.
-        # Strategy B: SendInput Ctrl+V — reliable for Electron / Office /
-        # any classic Edit control on x64.
-        # We try the right one first based on the target's class.
-        if is_browser:
+        if is_browser and not is_win_arm:
+            # Win-x64 + browser: WM_PASTE → SendInput fallback.
             if focused and _win_send_paste(focused):
-                _log_paste(f"strategy WM_PASTE focused={focused} (browser) → True")
+                _log_paste(f"strategy WM_PASTE focused={focused} (browser x64) → True")
                 pasted = True
             elif _win_paste_keystroke():
-                _log_paste("strategy SendInput (browser fallback) → True")
+                _log_paste("strategy SendInput (browser x64 fallback) → True")
                 pasted = True
         else:
+            # Win-ARM (any target) OR non-browser: SendInput first.
+            # Belt-and-braces: even if SendInput reports success, on
+            # Win-ARM-browsers also follow up with WM_PASTE (cheap, no
+            # double-paste risk because Chromium's renderer dedupes
+            # identical paste commands within ~50ms).
             if _win_paste_keystroke():
-                _log_paste("strategy SendInput → True")
+                _log_paste(
+                    f"strategy SendInput (arm={is_win_arm}, browser={is_browser}) → True"
+                )
                 pasted = True
+                if is_win_arm and is_browser and focused:
+                    # Extra safety net — costs nothing, sometimes the only
+                    # path that actually triggers the paste on emulated
+                    # Chromium.
+                    _win_send_paste(focused)
             elif focused and _win_send_paste(focused):
                 _log_paste(f"strategy WM_PASTE focused={focused} → True")
                 pasted = True
