@@ -737,11 +737,50 @@ def _win_paste_attached(
     except Exception:
         pass
 
-    # Alt-tap lifts the foreground-lock for ~5s.
-    VK_MENU = 0x12
-    KEYEVENTF_KEYUP = 0x0002
-    user32.keybd_event(VK_MENU, 0, 0, 0)
-    user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+    # v0.5.9: lift the foreground-lock via SystemParametersInfoW instead
+    # of the old Alt-tap trick.  Alt-tap synthesises a real Alt-down/up
+    # which doubles as the menu-activation key in many apps: Chrome
+    # focuses the URL bar / hamburger menu, Office Apps focus the
+    # ribbon, generic apps enter "menu-navigation mode" where the next
+    # keystroke (our Ctrl+V) is consumed by the menu instead of the
+    # text input.  TJ-report from Erik on v0.5.8:
+    #   "springt aufs Menu / anderes Feld blau umrandet" (Office, Word)
+    #   "Chrome paste geht nicht mehr"
+    # SystemParametersInfo(SPI_SETFOREGROUNDLOCKTIMEOUT, 0) sets the OS
+    # foreground-lock timeout to zero, so SetForegroundWindow goes
+    # through immediately without any synthetic input.  We restore the
+    # original timeout afterwards in the finally block so we don't
+    # leave the user's system permanently in "no-lock" mode.
+    SPI_GETFOREGROUNDLOCKTIMEOUT = 0x2000
+    SPI_SETFOREGROUNDLOCKTIMEOUT = 0x2001
+    SPIF_SENDCHANGE = 0x0002
+    _orig_lock_timeout = ctypes.c_uint(0)
+    _lock_timeout_lifted = False
+    try:
+        user32.SystemParametersInfoW.argtypes = [
+            wintypes.UINT,
+            wintypes.UINT,
+            ctypes.c_void_p,
+            wintypes.UINT,
+        ]
+        user32.SystemParametersInfoW.restype = wintypes.BOOL
+        if user32.SystemParametersInfoW(
+            SPI_GETFOREGROUNDLOCKTIMEOUT,
+            0,
+            ctypes.byref(_orig_lock_timeout),
+            0,
+        ):
+            # uiParam carries the timeout value when SPIF is SET — must
+            # be cast to c_void_p (Win API takes it as ULONG_PTR).
+            user32.SystemParametersInfoW(
+                SPI_SETFOREGROUNDLOCKTIMEOUT,
+                0,
+                ctypes.c_void_p(0),
+                SPIF_SENDCHANGE,
+            )
+            _lock_timeout_lifted = True
+    except Exception:
+        pass
 
     fg = user32.GetForegroundWindow()
     fg_thread = user32.GetWindowThreadProcessId(fg, None) if fg else 0
@@ -866,6 +905,19 @@ def _win_paste_attached(
             _win_keybd_paste()
             _log_paste("strategy keybd_event fired (unverified, not counted as paste)")
     finally:
+        # v0.5.9: restore the original foreground-lock timeout. We must
+        # always do this — leaving it at zero would mean any background
+        # process could steal user focus until the next reboot.
+        if _lock_timeout_lifted:
+            try:
+                user32.SystemParametersInfoW(
+                    SPI_SETFOREGROUNDLOCKTIMEOUT,
+                    0,
+                    ctypes.c_void_p(int(_orig_lock_timeout.value)),
+                    SPIF_SENDCHANGE,
+                )
+            except Exception:
+                pass
         if attached_fg:
             user32.AttachThreadInput(my_thread, fg_thread, False)
         if attached_target:
