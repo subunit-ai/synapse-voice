@@ -32,9 +32,42 @@ def _is_win_arm() -> bool:
     paste-keystroke story than native-x64: synthetic Ctrl+V's modifier
     state doesn't always propagate through the emulator's input-routing,
     so we have to prefer SendInput over WM_PASTE on this arch.
+
+    v0.5.7 fix (Codex finding #4): the previous `platform.machine()`
+    check reports AMD64 inside an x64 process running under emulation
+    on a native-ARM64 host.  So if a user installs the x64 build of
+    Sonar on a Snapdragon machine, we'd treat it as "real x64", apply
+    the wrong paste strategy, and re-introduce the Chrome-on-ARM bug.
+    Use IsWow64Process2 to ask the OS about the actual hardware.
     """
     if sys.platform != "win32":
         return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        if hasattr(kernel32, "IsWow64Process2"):
+            kernel32.IsWow64Process2.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(wintypes.USHORT),
+                ctypes.POINTER(wintypes.USHORT),
+            ]
+            kernel32.IsWow64Process2.restype = wintypes.BOOL
+            proc = kernel32.GetCurrentProcess()
+            proc_machine = wintypes.USHORT(0)
+            native_machine = wintypes.USHORT(0)
+            if kernel32.IsWow64Process2(
+                proc,
+                ctypes.byref(proc_machine),
+                ctypes.byref(native_machine),
+            ):
+                # IMAGE_FILE_MACHINE_ARM64 = 0xAA64
+                if native_machine.value == 0xAA64:
+                    return True
+    except Exception:
+        pass
+    # Fallback for older Windows (< 10 v1709) or detection failure.
     m = _platform.machine().lower()
     return m in ("arm64", "aarch64")
 
@@ -299,19 +332,47 @@ def _qt_set_clipboard(text: str) -> bool:
         der ersten Aufnahme").
       * Qt sets BOTH CF_UNICODETEXT and CF_TEXT and announces the format
         list correctly so Chromium / Office / Notepad all pick it up.
+
+    v0.5.7 (Codex findings #2/#3): QClipboard.setText() returns void —
+    the previous code assumed "no exception = success", but Qt can fail
+    silently when the OS clipboard is locked by another app, when we're
+    on the wrong thread, or when the QPA backend is offscreen.  Now we
+    verify the set via a native readback and fall back to the ctypes
+    path on disagreement.
     """
     try:
+        from PyQt6.QtCore import QCoreApplication
         from PyQt6.QtGui import QGuiApplication
 
         app = QGuiApplication.instance()
         if app is None:
+            _log_paste("clipboard: QGuiApplication missing → ctypes fallback")
             return _win_set_clipboard(text)
         cb = app.clipboard()
         if cb is None:
+            _log_paste("clipboard: QClipboard missing → ctypes fallback")
             return _win_set_clipboard(text)
         cb.setText(text)
-        return True
-    except Exception:
+        # Pump the Qt event loop so the OLE/Win32 clipboard hand-off
+        # actually publishes before we paste.  Without this the
+        # SetForegroundWindow + Ctrl+V that follows can fire before the
+        # target app has the new content available.
+        try:
+            QCoreApplication.processEvents()
+        except Exception:
+            pass
+        # Verify by reading back via the native clipboard API.  If Qt
+        # silently dropped the set (OLE lock, race, wrong QPA) the
+        # native read returns the previous contents or None.
+        for _ in range(20):  # ~400ms total wait
+            check = _win_get_clipboard()
+            if check == text:
+                return True
+            time.sleep(0.02)
+        _log_paste("clipboard: Qt setText didn't take, falling back to ctypes")
+        return _win_set_clipboard(text)
+    except Exception as e:
+        _log_paste(f"clipboard: Qt path raised {type(e).__name__}: {e!s} → ctypes fallback")
         # Last-resort: try the ctypes path so we don't silently drop the
         # transcription if Qt's clipboard subsystem is unhappy.
         return _win_set_clipboard(text)
@@ -729,9 +790,15 @@ def _win_paste_attached(hwnd: int, title: str) -> tuple[bool, str]:
 
         # Strategy 4: legacy keybd_event — last resort. Some old native
         # apps respect it even when SendInput is silently filtered.
-        if not pasted and _win_keybd_paste():
-            _log_paste("strategy keybd_event → True")
-            pasted = True
+        # v0.5.7 (Codex finding #1): keybd_event ALWAYS returns True
+        # unless we throw, so we can't trust it as a success signal.
+        # Still fire it as a side-effect (might genuinely paste in some
+        # old native apps) but do NOT flip `pasted=True`.  This prevents
+        # the "paste reported success but didn't happen → clipboard
+        # restore wipes the transcript" failure mode users were hitting.
+        if not pasted:
+            _win_keybd_paste()
+            _log_paste("strategy keybd_event fired (unverified, not counted as paste)")
     finally:
         if attached_fg:
             user32.AttachThreadInput(my_thread, fg_thread, False)

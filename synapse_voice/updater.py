@@ -121,25 +121,88 @@ def _extract_installer_hash(body: str, installer_name: Optional[str]) -> Optiona
     return None
 
 
+def _detect_win_host_is_arm() -> bool:
+    """Detect whether the underlying Windows host is ARM64.
+
+    `platform.machine()` returns AMD64 inside an x64 process even when
+    that process is running emulated on a native-ARM64 host (which is
+    exactly Erik's Surface Pro 2024 scenario).  Use `IsWow64Process2`
+    so we see the real hardware, not the process's perceived arch.
+
+    Returns False on any failure or non-Win platform — that's the safe
+    default (treat as x64).
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        # IsWow64Process2 exists from Windows 10 v1709 (2017).  Earlier
+        # OSes report False and we treat them as x64 — there are no
+        # Win10-pre-1709 ARM devices anyway.
+        if not hasattr(kernel32, "IsWow64Process2"):
+            return False
+        kernel32.IsWow64Process2.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.USHORT),
+            ctypes.POINTER(wintypes.USHORT),
+        ]
+        kernel32.IsWow64Process2.restype = wintypes.BOOL
+        proc = kernel32.GetCurrentProcess()
+        proc_machine = wintypes.USHORT(0)
+        native_machine = wintypes.USHORT(0)
+        if not kernel32.IsWow64Process2(
+            proc, ctypes.byref(proc_machine), ctypes.byref(native_machine)
+        ):
+            return False
+        # IMAGE_FILE_MACHINE_ARM64 = 0xAA64
+        return native_machine.value == 0xAA64
+    except Exception:
+        return False
+
+
 def _pick_installer_asset(assets: list) -> tuple[Optional[str], Optional[str]]:
     """Pick the right release asset for the current platform.
 
-    Windows: SynapseVoice-Setup-X.Y.Z.exe (NSIS installer — handles the
-        running-process kill + reinstall + relaunch).
-    macOS:   Sonar-X.Y.Z-arm64.dmg (mountable disk image; we open it
-        and let the user drag to /Applications — replacing a running .app
-        from inside itself is fragile).
-    Linux:   SynapseVoice-x86_64.AppImage (self-contained binary; we
-        replace the running file in-place + re-exec).
+    Windows: SynapseVoice-Setup-X.Y.Z.exe (x64) OR
+             SynapseVoice-Setup-X.Y.Z-arm64.exe (ARM64).
+             v0.5.7 fix: filter by host architecture using
+             IsWow64Process2.  Before, we returned the first .exe with
+             "setup" in the name — GitHub API listed the ARM64 asset
+             first, so Win-x64 users got the ARM installer (which would
+             then fail to install or run).  Combined with the filename
+             bug below, this is why TJ + Dirk were stuck on v0.5.5.
+    macOS:   Sonar-X.Y.Z-arm64.dmg (Apple Silicon).
+    Linux:   SynapseVoice-x86_64.AppImage.
     """
     is_win = sys.platform == "win32"
     is_mac = sys.platform == "darwin"
+    is_win_arm = _detect_win_host_is_arm() if is_win else False
+
+    # Two-pass scan: first match the architecture exactly, then accept
+    # the unsuffixed x64 build as a fallback only on x64 hosts.
+    if is_win:
+        # ARM hosts: prefer the explicit -arm64.exe.  x64 hosts: reject
+        # any asset with "arm64" in the name.
+        for a in assets:
+            name = (a.get("name") or "").strip()
+            url = a.get("browser_download_url") or ""
+            lower = name.lower()
+            if not (lower.endswith(".exe") and "setup" in lower):
+                continue
+            has_arm_suffix = "arm64" in lower
+            if is_win_arm and has_arm_suffix:
+                return url, name
+            if not is_win_arm and not has_arm_suffix:
+                return url, name
+        return None, None
+
     for a in assets:
         name = (a.get("name") or "").strip()
         url = a.get("browser_download_url") or ""
         lower = name.lower()
-        if is_win and lower.endswith(".exe") and "setup" in lower:
-            return url, name
         if is_mac and lower.endswith(".dmg"):
             return url, name
         if (not is_win) and (not is_mac) and lower.endswith(".appimage"):
@@ -178,6 +241,7 @@ def download_installer(
     progress_cb: Optional[Callable[[int, int], None]] = None,
     timeout: float = 30.0,
     expected_sha256: Optional[str] = None,
+    asset_name: Optional[str] = None,
 ) -> Path:
     """Stream-download the installer to disk. Verifies the host of every
     redirect-hop, writes to a private 0700 temp directory, computes the
@@ -186,6 +250,14 @@ def download_installer(
 
     Calls progress_cb(bytes, total) on every chunk if total size is
     known. Returns the saved path on success.
+
+    `asset_name` (v0.5.7) is the original GitHub asset filename
+    (e.g. ``SynapseVoice-Setup-0.5.7.exe``).  When provided, the local
+    file is saved under that name.  This avoids the v0.5.6 bug where we
+    derived the filename from the resolved GitHub CDN URL — that URL
+    carries a query string with ``?``, ``&``, ``=`` chars that are
+    invalid in Windows filenames, so the download silently failed and
+    auto-update never landed.
     """
     if not _is_allowed_download_url(url):
         raise ValueError(
@@ -215,7 +287,22 @@ def download_installer(
         os.chmod(target_dir, 0o700)
     except OSError:
         pass  # filesystem doesn't support modes (Win FAT etc.) — tolerable
-    target = target_dir / (Path(resolved_url).name or "synapse-voice-update.bin")
+    # v0.5.7: derive the local filename from the original asset name, NOT
+    # from the resolved CDN URL (which carries a signed query string that
+    # is invalid as a Windows path).
+    if asset_name:
+        # Sanitize defensively — asset names are controlled by us via the
+        # release workflow, but a hostile release could put path
+        # separators in here.
+        safe_name = Path(asset_name).name
+        target = target_dir / safe_name
+    else:
+        # Legacy callers that didn't pass asset_name still need to work.
+        # Fall back to the URL-derived name but strip query strings.
+        from urllib.parse import urlparse
+
+        url_basename = Path(urlparse(resolved_url).path).name
+        target = target_dir / (url_basename or "synapse-voice-update.bin")
 
     _log.info("Downloading update from %s → %s", resolved_url, target)
     hasher = hashlib.sha256()

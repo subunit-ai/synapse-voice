@@ -428,22 +428,18 @@ class SynapseVoiceApp(QObject):
             # top can still interfere with our SetForegroundWindow + Ctrl+V.
             if self.config.show_bubble and self.bubble.isVisible():
                 self.bubble.hide()
-            # Codex-finding (Should): save the user's clipboard before we
-            # overwrite it, then restore after a short delay so other
-            # apps can't read the transcribed text from the system
-            # clipboard. Only restore on a successful paste — clipboard
-            # mode means the user wants to keep the text there.
-            from .target_lock import get_clipboard, set_clipboard
-
-            saved_clipboard = get_clipboard()
+            # v0.5.7: clipboard-restore disabled.  The previous behavior
+            # was: save user's clipboard before paste, restore 2.5s after
+            # a "successful" paste.  Codex found that "successful" was
+            # being claimed too generously (keybd_event always returns
+            # True, SendInput only confirms queueing, WM_PASTE only
+            # confirms delivery), so on Win-ARM and edge cases the
+            # transcript got wiped before the user could re-paste
+            # manually.  Better behavior: transcript stays in clipboard
+            # so the user can always paste it manually.  Re-introduce
+            # restore in v0.5.8+ once paste-success is verifiable via
+            # foreground-window matching post-paste.
             _ok, mode = paste_into(self.target, text)
-            if mode == "pasted" and saved_clipboard is not None:
-                # 2.5s gives the target app time to handle Ctrl+V before
-                # we yank the text back out of the clipboard.
-                QTimer.singleShot(
-                    2500,
-                    lambda saved=saved_clipboard: set_clipboard(saved),
-                )
         else:
             from .target_lock import set_clipboard
 
@@ -823,10 +819,11 @@ class SynapseVoiceApp(QObject):
             finished_with_path = pyqtSignal(str)
             failed = pyqtSignal(str)
 
-            def __init__(self, url: str, expected_hash: str = "") -> None:
+            def __init__(self, url: str, expected_hash: str = "", asset_name: str = "") -> None:
                 super().__init__()
                 self.url = url
                 self.expected_hash = expected_hash
+                self.asset_name = asset_name
                 self._cancelled = False
 
             def cancel(self) -> None:
@@ -843,13 +840,18 @@ class SynapseVoiceApp(QObject):
                         self.url,
                         progress_cb=cb,
                         expected_sha256=self.expected_hash or None,
+                        asset_name=self.asset_name or None,
                     )
                     self.finished_with_path.emit(str(target))
                 except Exception as e:
                     if not self._cancelled:
                         self.failed.emit(str(e))
 
-        worker = _Worker(info.installer_url, info.installer_sha256 or "")
+        worker = _Worker(
+            info.installer_url,
+            info.installer_sha256 or "",
+            info.installer_name or "",
+        )
         # Keep ref so it isn't GC'd mid-flight.
         self._update_worker = worker
 

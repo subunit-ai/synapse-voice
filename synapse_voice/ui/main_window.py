@@ -473,18 +473,38 @@ class MainWindow(QMainWindow):
         Local mode → model picker. Cloud mode → provider picker. Both as
         click-to-open chips so the user has clear visual targets instead
         of a dropdown that's mysteriously disabled half the time.
+
+        v0.5.7: clear NESTED layouts too — the old loop only saw direct
+        widgets via item.widget() and silently skipped sub-QVBoxLayouts.
+        Result was "Local model" label still painted on top of "Cloud
+        provider" after a Local→Cloud toggle (TJ-report: "Cloud provider
+        ist doppelt überschrieben").
         """
-        # Wipe the layout
-        while self._detail_layout.count():
-            item = self._detail_layout.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
+        self._clear_layout_recursive(self._detail_layout)
 
         if self.config.mode == "local":
             self._build_local_detail()
         else:
             self._build_cloud_detail()
+
+    @staticmethod
+    def _clear_layout_recursive(layout) -> None:
+        """Remove every widget AND every nested sub-layout from `layout`.
+
+        Qt's QLayoutItem can be a widget OR a layout OR a spacer.  The
+        previous version only handled widgets, so any sub-QVBoxLayout's
+        QLabels would survive a rebuild and stack on top of the new ones.
+        """
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+                continue
+            sub = item.layout()
+            if sub is not None:
+                MainWindow._clear_layout_recursive(sub)
+                sub.deleteLater()
 
     def _build_local_detail(self) -> None:
         # Title block
