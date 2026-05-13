@@ -172,9 +172,12 @@ async def transcribe(
 
     t0 = time.time()
     model = _load_model()
+    # v0.6.0: "auto" or empty language → let faster-whisper detect
+    # the language per utterance.  Useful for mixed-language meetings.
+    lang_arg = None if language in ("", "auto", None) else language
     segments, info = model.transcribe(
         audio,
-        language=language or None,
+        language=lang_arg,
         initial_prompt=initial_prompt,
         beam_size=5,
         vad_filter=True,
@@ -210,7 +213,11 @@ async def transcribe(
 
 class CleanupRequest(BaseModel):
     text: str
-    style: Literal["tidy", "formal", "prompt", "email", "slack", "raw"] = "tidy"
+    style: Literal[
+        "tidy", "formal", "prompt", "email", "slack",
+        "summary", "action_items", "minutes", "decisions",
+        "raw",
+    ] = "tidy"
 
 
 @app.post("/v1/cleanup")

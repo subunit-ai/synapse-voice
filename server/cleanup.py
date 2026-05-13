@@ -124,6 +124,77 @@ PROMPTS: dict[str, str] = {
         "  - drop fillers and repeats\n"
         "  - emoji are OK only if the speaker explicitly mentioned one"
     ),
+    # 2026-05-13 (read.ai-inspired): meeting + long-form styles.  These
+    # are typically applied to multi-minute recordings rather than
+    # 30-second dictations.  They share the absolute-rules base so
+    # they still refuse to refuse and never invent specifics.
+    "summary": (
+        _BASE_RULES + "\n"
+        "STYLE: meeting summary.  The transcript is a longer recording "
+        "(call, meeting, monologue, or extended dictation).\n"
+        "  - condense into a structured summary the speaker would write "
+        "    themselves to remember what was said\n"
+        "  - structure: 1-2 line context / opener, then bullet points "
+        "    for the main topics, then a short ‘was beschlossen / what "
+        "    was decided’ section if applicable\n"
+        "  - cover EVERY substantive point — coverage matters more than "
+        "    elegance.  If a topic was discussed, it must appear.\n"
+        "  - DO NOT add interpretation, advice, or implications that "
+        "    were not voiced.  The summary mirrors the meeting, it does "
+        "    not analyse it.\n"
+        "  - use the speaker's own terminology and proper nouns "
+        "    verbatim (names, products, project codenames)\n"
+        "  - if the transcript is too short to be a meeting (under "
+        "    ~30 seconds of content), just clean it like the 'tidy' "
+        "    style does and skip the structure"
+    ),
+    "action_items": (
+        _BASE_RULES + "\n"
+        "STYLE: action-item extraction.\n"
+        "Return ONLY action items from the transcript, as a bullet list.\n"
+        "  - format each as: '- [@owner] description (due: deadline?)' "
+        "    where [@owner] uses the name the speaker mentioned (or "
+        "    [@me] if it's a self-task, or leave blank if no owner is "
+        "    given) and (due: …) only if a date was mentioned\n"
+        "  - include both explicit (‘we need to do X’) and implicit "
+        "    (‘ich schreibe Erik wegen Y’) action items\n"
+        "  - DO NOT add action items that weren't mentioned\n"
+        "  - if there are no action items in the transcript, return "
+        "    exactly: 'No action items.'\n"
+        "  - one bullet per item, no headers, no preamble"
+    ),
+    "minutes": (
+        _BASE_RULES + "\n"
+        "STYLE: formal meeting minutes / Protokoll.\n"
+        "Produce a meeting protocol the speaker can paste into a docs "
+        "system as the official record of the meeting.\n"
+        "  - structure: \n"
+        "      Topic / Theme: <1 line>\n"
+        "      Participants: <list of names mentioned, or 'not stated'>\n"
+        "      Discussion:\n"
+        "      - bullet for each topic discussed\n"
+        "      Decisions:\n"
+        "      - bullet for each decision made (or 'none')\n"
+        "      Action Items:\n"
+        "      - bullets as in the action_items style (or 'none')\n"
+        "  - formal but readable tone\n"
+        "  - keep the original language of the meeting\n"
+        "  - if a section has nothing, write 'none' rather than omitting"
+    ),
+    "decisions": (
+        _BASE_RULES + "\n"
+        "STYLE: decisions extraction.\n"
+        "Return ONLY the decisions made in the transcript, as a bullet "
+        "list of short, declarative sentences.\n"
+        "  - one decision per bullet\n"
+        "  - include who decided it if the speaker said so ('TJ: …' or "
+        "    'Erik: …'), otherwise omit attribution\n"
+        "  - exclude open questions, considerations, and items that "
+        "    were discussed but not decided\n"
+        "  - if there are no clear decisions, return exactly: "
+        "    'No decisions made.'\n"
+        "  - no headers, no preamble"
+    ),
 }
 
 
@@ -177,7 +248,11 @@ def _looks_like_refusal(output: str, original: str) -> bool:
                 return True
     return False
 
-Style = Literal["tidy", "formal", "prompt", "email", "slack", "raw"]
+Style = Literal[
+    "tidy", "formal", "prompt", "email", "slack",
+    "summary", "action_items", "minutes", "decisions",
+    "raw",
+]
 
 
 class CleanupError(RuntimeError):

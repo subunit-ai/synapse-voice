@@ -62,7 +62,12 @@ class CloudTranscriber:
         wav_bytes = _audio_to_wav_bytes(audio)
         headers = {"Authorization": f"Bearer {self.api_key}"}
         files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
-        data = {"model": self.model, "language": language}
+        # v0.6.0: "auto" or empty → omit language param so the cloud
+        # endpoint runs Whisper's built-in language detection.  Both
+        # OpenAI and Groq accept the absence of the field.
+        data: dict[str, str] = {"model": self.model}
+        if language and language not in ("auto", ""):
+            data["language"] = language
         # OpenAI's /v1/audio/transcriptions accepts a "prompt" field that
         # biases the model — same format used by Groq + most OpenAI-compat
         # providers, so we pass it through unconditionally.

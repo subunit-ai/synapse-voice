@@ -76,6 +76,15 @@ class Config:
     cleanup_auto_mode: bool = False
     auto_mode_overrides: dict = field(default_factory=dict)
 
+    # v0.6.0: Long-form mode (read.ai-inspired).  When a recording is
+    # at least `long_form_threshold_seconds` long, override the user's
+    # configured cleanup_style with `long_form_cleanup_style` for that
+    # one transcription.  Lets a single hotkey serve both short dictation
+    # ("send a Slack message") and long captures ("here's the meeting
+    # I just had").  Set the threshold to 0 to disable.
+    long_form_threshold_seconds: int = 60
+    long_form_cleanup_style: str = "summary"  # summary | action_items | minutes | decisions
+
     # v0.3.29: Subunit Suite — Voice → Synapse Knowledge Base bridge.
     # When on, every transcript is POSTed to /v1/synapse/save after
     # cleanup, so it shows up in your Synapse semantic-search index.

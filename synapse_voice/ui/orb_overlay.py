@@ -387,8 +387,12 @@ class OrbOverlay(QWidget):
             p.setPen(white)
             r = QRect(sx - self.SAT_RADIUS, sy - self.SAT_RADIUS,
                        self.SAT_RADIUS * 2, self.SAT_RADIUS * 2)
-            p.drawText(r, int(Qt.AlignmentFlag.AlignCenter),
-                       (self.config.language or "DE").upper()[:2])
+            # v0.6.0: render "auto" as ⇋ (auto-detect glyph) instead of
+            # the literal "AU" letters, so the satellite stays legible
+            # at small sizes.
+            lang_code = (self.config.language or "DE").lower()
+            label = "⇋" if lang_code in ("auto", "") else lang_code.upper()[:2]
+            p.drawText(r, int(Qt.AlignmentFlag.AlignCenter), label)
         elif name == "right":
             # Sparkle — diagonal cross + tiny dot
             p.drawLine(sx - 3, sy, sx + 3, sy)

@@ -52,8 +52,13 @@ class LocalTranscriber:
             return ""
         with self._lock:
             model = self._load()
+            # v0.6.0: "auto" or "" → let Whisper detect the language per
+            # utterance.  Useful for mixed-language calls (DE/EN mixed
+            # team) where forcing a single language costs accuracy on
+            # the other one.
+            lang_arg = None if language in ("auto", "", None) else language
             kwargs = dict(
-                language=language,
+                language=lang_arg,
                 beam_size=5,
                 vad_filter=True,
             )

@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSpinBox,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -262,9 +263,13 @@ class SettingsDialog(QDialog):
         layout.addSpacing(6)
         layout.addWidget(_section_title("Language"))
         self.lang_edit = QLineEdit(self.config.language)
-        self.lang_edit.setPlaceholderText("de, en, fr, ...")
+        self.lang_edit.setPlaceholderText("de, en, fr, ... or 'auto'")
         layout.addWidget(self.lang_edit)
-        layout.addWidget(_hint("ISO-639-1 code. Pass an empty string to auto-detect (slower)."))
+        layout.addWidget(_hint(
+            "ISO-639-1 code (de, en, fr, ...) — or 'auto' to let Whisper detect "
+            "the language per recording. 'auto' is best for mixed-language calls "
+            "(slightly slower, ~5%)."
+        ))
 
         layout.addSpacing(6)
         layout.addWidget(_section_title("Behaviour"))
@@ -395,10 +400,17 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self.row_cleanup)
         self.cleanup_style_combo = QComboBox()
+        # Short-form / dictation styles
         self.cleanup_style_combo.addItem("Prompt — rewrite as structured AI prompt", "prompt")
         self.cleanup_style_combo.addItem("Email — polite, well-structured email body", "email")
         self.cleanup_style_combo.addItem("Slack — short casual chat message", "slack")
         self.cleanup_style_combo.addItem("Formal — business / executive tone", "formal")
+        self.cleanup_style_combo.insertSeparator(self.cleanup_style_combo.count())
+        # v0.6.0: long-form / meeting styles (read.ai-inspired).
+        self.cleanup_style_combo.addItem("Summary — meeting / monologue → structured summary", "summary")
+        self.cleanup_style_combo.addItem("Action Items — extract only action items as bullet list", "action_items")
+        self.cleanup_style_combo.addItem("Minutes — formal meeting protocol (participants / decisions / actions)", "minutes")
+        self.cleanup_style_combo.addItem("Decisions — extract only decisions made", "decisions")
         idx = self.cleanup_style_combo.findData(self.config.cleanup_style)
         if idx >= 0:
             self.cleanup_style_combo.setCurrentIndex(idx)
@@ -415,6 +427,45 @@ class SettingsDialog(QDialog):
             self.config.cleanup_auto_mode,
         )
         layout.addWidget(self.row_auto_mode)
+
+        # v0.6.0: Long-form mode — for recordings longer than the
+        # threshold, override the cleanup style with a long-form one.
+        # Lets one hotkey serve both 5-second Slack messages and
+        # 20-minute meetings without manual style-switching.
+        layout.addSpacing(8)
+        layout.addWidget(_section_title("Long-form mode"))
+        layout.addWidget(_hint(
+            "Recordings longer than the threshold auto-apply a long-form "
+            "cleanup style (e.g. summary, action items).  Use it for "
+            "meetings and long monologues."
+        ))
+
+        lf_row = QHBoxLayout()
+        lf_row.setContentsMargins(0, 0, 0, 0)
+        lf_row.addWidget(QLabel("Activate when recording reaches"))
+        self.long_form_threshold_spin = QSpinBox()
+        self.long_form_threshold_spin.setRange(0, 3600)
+        self.long_form_threshold_spin.setSuffix(" s")
+        self.long_form_threshold_spin.setValue(
+            int(getattr(self.config, "long_form_threshold_seconds", 60) or 0)
+        )
+        self.long_form_threshold_spin.setSpecialValueText("disabled")
+        lf_row.addWidget(self.long_form_threshold_spin)
+        lf_row.addSpacing(12)
+        lf_row.addWidget(QLabel("→ apply"))
+        self.long_form_style_combo = QComboBox()
+        self.long_form_style_combo.addItem("Summary", "summary")
+        self.long_form_style_combo.addItem("Action Items", "action_items")
+        self.long_form_style_combo.addItem("Minutes (Protokoll)", "minutes")
+        self.long_form_style_combo.addItem("Decisions", "decisions")
+        lf_idx = self.long_form_style_combo.findData(
+            getattr(self.config, "long_form_cleanup_style", "summary") or "summary"
+        )
+        if lf_idx >= 0:
+            self.long_form_style_combo.setCurrentIndex(lf_idx)
+        lf_row.addWidget(self.long_form_style_combo)
+        lf_row.addStretch(1)
+        layout.addLayout(lf_row)
 
         layout.addSpacing(6)
         layout.addWidget(_section_title("Updates"))
@@ -1082,6 +1133,12 @@ class SettingsDialog(QDialog):
         config.cleanup_style = self.cleanup_style_combo.currentData() or "prompt"
         if hasattr(self, "row_auto_mode"):
             config.cleanup_auto_mode = self.row_auto_mode.is_on()
+        if hasattr(self, "long_form_threshold_spin"):
+            config.long_form_threshold_seconds = int(self.long_form_threshold_spin.value())
+        if hasattr(self, "long_form_style_combo"):
+            config.long_form_cleanup_style = (
+                self.long_form_style_combo.currentData() or "summary"
+            )
         if hasattr(self, "auto_table"):
             config.auto_mode_overrides = self._harvest_auto_overrides()
         if hasattr(self, "row_synapse_save"):

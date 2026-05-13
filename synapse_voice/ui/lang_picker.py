@@ -87,6 +87,14 @@ class LangPickerPopup(QWidget):
 
     def _populate(self, current: str) -> None:
         self.list.clear()
+        # v0.6.0: "Auto-detect" goes first so users discover it
+        # without searching.  Maps to the empty/auto language value the
+        # transcriber treats as "let Whisper figure it out".
+        auto_item = QListWidgetItem("Auto-detect    ·    auto    (best for mixed-language calls)")
+        auto_item.setData(Qt.ItemDataRole.UserRole, "auto")
+        if (current or "").lower() in ("auto", ""):
+            auto_item.setForeground(QColor(CYAN))
+        self.list.addItem(auto_item)
         for code, name in LANGUAGES:
             it = QListWidgetItem(f"{name}    ·    {code}")
             it.setData(Qt.ItemDataRole.UserRole, code)

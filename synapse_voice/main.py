@@ -119,6 +119,27 @@ class TranscribeWorker(QObject):
                             label,
                         )
 
+                # v0.6.0 (read.ai-inspired long-form mode): if the
+                # recording is longer than the configured threshold,
+                # override the cleanup style with the long-form style.
+                # Default: > 60 seconds → "summary".  Set the threshold
+                # to 0 in Settings to disable this auto-switch.
+                threshold = max(0, getattr(self._config, "long_form_threshold_seconds", 60) or 0)
+                if threshold > 0 and self._audio is not None:
+                    # _audio is mono float32 at 16 kHz (see recorder.py).
+                    duration_s = float(self._audio.shape[0]) / 16000.0
+                    if duration_s >= threshold:
+                        long_style = (
+                            getattr(self._config, "long_form_cleanup_style", "summary")
+                            or "summary"
+                        )
+                        _log.info(
+                            "Long-form mode: %.1fs >= %ds → switching style "
+                            "%r → %r",
+                            duration_s, threshold, style, long_style,
+                        )
+                        style = long_style
+
                 cleaned = cleanup_text(
                     text,
                     transcribe_endpoint=self._config.subunit_endpoint,
