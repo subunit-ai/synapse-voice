@@ -18,6 +18,12 @@ class WindowTarget:
     window_id: str
     title: str
     platform: str
+    # v0.5.8: focused-child HWND captured at hotkey-press time, so we
+    # can restore focus to the actual text input later instead of the
+    # outer top-level HWND (which is what SetFocus on the parent gives
+    # us — and which paints WM_PASTE into nowhere on browsers etc.).
+    # None on non-Win platforms, or when GetGUIThreadInfo failed.
+    focus_hwnd: Optional[int] = None
 
 
 def _have(cmd: str) -> bool:
@@ -89,6 +95,7 @@ def capture_active_window() -> WindowTarget | None:
         try:
             import ctypes
             import os as _os
+            from ctypes import wintypes
 
             user32 = ctypes.windll.user32
             hwnd = user32.GetForegroundWindow()
@@ -107,7 +114,28 @@ def capture_active_window() -> WindowTarget | None:
             length = user32.GetWindowTextLengthW(hwnd)
             buf = ctypes.create_unicode_buffer(length + 1)
             user32.GetWindowTextW(hwnd, buf, length + 1)
-            return WindowTarget(window_id=str(hwnd), title=buf.value, platform="win32")
+
+            # v0.5.8: also capture the focused-child HWND.
+            # When the user pressed our hotkey, their text cursor was
+            # in some control inside `hwnd` — possibly a deeply nested
+            # Edit / RichEdit / Chromium renderer child.  Save it now so
+            # we can target WM_PASTE at the right HWND later instead of
+            # the top-level (which v0.5.6's SetFocus(hwnd) was wrongly
+            # routing to → "Erik: er springt raus aus dem Eingabefeld").
+            focus_hwnd: Optional[int] = None
+            try:
+                target_tid = user32.GetWindowThreadProcessId(hwnd, None)
+                if target_tid:
+                    focus_hwnd = _win_focused_hwnd_for_thread(target_tid)
+            except Exception:
+                pass
+
+            return WindowTarget(
+                window_id=str(hwnd),
+                title=buf.value,
+                platform="win32",
+                focus_hwnd=focus_hwnd,
+            )
         except Exception:
             return None
     if sys.platform == "darwin":
@@ -654,7 +682,11 @@ def paste_into(target: WindowTarget | None, text: str) -> tuple[bool, str]:
     # SendInput (returns sent=0) and made GetFocus return NULL — so
     # WM_PASTE always fell back to the wrong (top-level) HWND.
     if target.platform == "win32":
-        return _win_paste_attached(int(target.window_id), target.title or "")
+        return _win_paste_attached(
+            int(target.window_id),
+            target.title or "",
+            captured_focus_hwnd=target.focus_hwnd,
+        )
 
     # Linux: xdotool already activated the window, single shot keystroke.
     if not focus_window(target):
@@ -664,7 +696,11 @@ def paste_into(target: WindowTarget | None, text: str) -> tuple[bool, str]:
     return True, "pasted"
 
 
-def _win_paste_attached(hwnd: int, title: str) -> tuple[bool, str]:
+def _win_paste_attached(
+    hwnd: int,
+    title: str,
+    captured_focus_hwnd: Optional[int] = None,
+) -> tuple[bool, str]:
     """Win-safe paste: attach input queues, focus, paste, detach — atomic.
 
     Why it has to be one block: Windows' input-queue isolation drops
@@ -674,6 +710,16 @@ def _win_paste_attached(hwnd: int, title: str) -> tuple[bool, str]:
     into the target's queue and GetFocus returns the real focused
     descendant (e.g. Win11 Notepad's RichEditD2DPT, which is what
     actually accepts WM_PASTE — the top-level Notepad HWND ignores it).
+
+    v0.5.8 (Codex finding #6 + Erik-report): `SetFocus(hwnd)` on the
+    top-level HWND destroys the child-focus that was active when the
+    user pressed our hotkey — visible effect: "er springt raus aus
+    dem Eingabefeld".  Instead, we now use `captured_focus_hwnd`
+    (snapshot taken at hotkey-press via GetGUIThreadInfo) as the
+    focus target, and never call SetFocus on the parent.  If
+    captured_focus_hwnd is stale (IsWindow() false), fall back to
+    SetForegroundWindow alone and let Windows restore the natural
+    last-focused descendant.
     """
     import ctypes
     from ctypes import wintypes
@@ -716,16 +762,36 @@ def _win_paste_attached(hwnd: int, title: str) -> tuple[bool, str]:
         user32.BringWindowToTop(hwnd)
         user32.SetForegroundWindow(hwnd)
         user32.SetActiveWindow(hwnd)
-        user32.SetFocus(hwnd)
+
+        # v0.5.8: ONLY SetFocus to the captured child, never to the
+        # top-level.  Top-level SetFocus destroyed the in-input cursor
+        # for Erik on Surface Pro.  If we never captured a child,
+        # don't call SetFocus at all — SetForegroundWindow alone is
+        # what users expect (restores last child focus naturally).
+        user32.IsWindow.argtypes = [wintypes.HWND]
+        user32.IsWindow.restype = wintypes.BOOL
+        focus_target: Optional[int] = None
+        if captured_focus_hwnd and user32.IsWindow(captured_focus_hwnd):
+            try:
+                user32.SetFocus.argtypes = [wintypes.HWND]
+                user32.SetFocus.restype = wintypes.HWND
+                user32.SetFocus(captured_focus_hwnd)
+                focus_target = captured_focus_hwnd
+            except Exception:
+                pass
         time.sleep(0.2)
 
         # Under attachment, GetFocus returns the actual focused descendant.
         user32.GetFocus.restype = wintypes.HWND
-        focused = user32.GetFocus()
+        focused = focus_target or user32.GetFocus()
         focused_class = _win_class_name(focused) if focused else "<none>"
+        capture_note = (
+            f" captured={captured_focus_hwnd}"
+            if captured_focus_hwnd else " (no capture)"
+        )
         _log_paste(
             f"attached: target={hwnd} ({title[:40]!r}) "
-            f"focused={focused} class={focused_class}"
+            f"focused={focused} class={focused_class}{capture_note}"
         )
 
         # Choose strategy order based on (a) the focused window class and
@@ -809,6 +875,57 @@ def _win_paste_attached(hwnd: int, title: str) -> tuple[bool, str]:
         return True, "pasted"
     _log_paste("all strategies failed → clipboard only")
     return True, "clipboard"
+
+
+def _win_focused_hwnd_for_thread(thread_id: int) -> Optional[int]:
+    """Return the HWND that owns the keyboard focus for `thread_id`.
+
+    Uses `GetGUIThreadInfo(thread_id, &info)` so we get the focus state
+    of an *external* GUI thread — which is what we need at hotkey-press
+    time, before our own thread takes focus.  Returns None on failure
+    or if the thread has no focused window.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _RECT(ctypes.Structure):
+            _fields_ = [
+                ("left", wintypes.LONG),
+                ("top", wintypes.LONG),
+                ("right", wintypes.LONG),
+                ("bottom", wintypes.LONG),
+            ]
+
+        class _GUITHREADINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("flags", wintypes.DWORD),
+                ("hwndActive", wintypes.HWND),
+                ("hwndFocus", wintypes.HWND),
+                ("hwndCapture", wintypes.HWND),
+                ("hwndMenuOwner", wintypes.HWND),
+                ("hwndMoveSize", wintypes.HWND),
+                ("hwndCaret", wintypes.HWND),
+                ("rcCaret", _RECT),
+            ]
+
+        user32 = ctypes.windll.user32
+        user32.GetGUIThreadInfo.argtypes = [
+            wintypes.DWORD,
+            ctypes.POINTER(_GUITHREADINFO),
+        ]
+        user32.GetGUIThreadInfo.restype = wintypes.BOOL
+        info = _GUITHREADINFO()
+        info.cbSize = ctypes.sizeof(_GUITHREADINFO)
+        if user32.GetGUIThreadInfo(thread_id, ctypes.byref(info)):
+            if info.hwndFocus:
+                return int(info.hwndFocus)
+    except Exception:
+        return None
+    return None
 
 
 def _is_browser_class(cls: str) -> bool:
