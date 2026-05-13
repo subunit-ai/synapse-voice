@@ -65,9 +65,17 @@ class OrbOverlay(QWidget):
     """
 
     DOT_RADIUS = 14            # the visible orb itself (~28px diameter)
-    PADDING = 38               # room around the orb for halo + satellites
-    SAT_RADIUS = 9             # satellite dot radius
-    SAT_DISTANCE = 26          # satellite distance from orb center
+    # v0.5.11 (TJ-feedback): satellites were "very tiny", make them the
+    # same size as the main dot since they only appear on hover/click
+    # anyway — no clutter risk, and clicking 28px targets is much
+    # easier than 18px ones (esp. on touch + Win-on-ARM tablets).
+    SAT_RADIUS = 14            # was 9; matches DOT_RADIUS now
+    # Bigger satellites need more breathing room from the orb center,
+    # otherwise they kiss the orb edge.  Push them out enough to leave
+    # a small visible gap.
+    SAT_DISTANCE = 34          # was 26
+    # And the window needs more padding so the satellites + halo fit.
+    PADDING = 52               # was 38
 
     def __init__(self, config: Config, on_change_mode: Callable[[str], None]) -> None:
         super().__init__()
@@ -92,9 +100,20 @@ class OrbOverlay(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
             | Qt.WindowType.X11BypassWindowManagerHint
+            # v0.5.11 (TJ-feedback): "bei Windows ist um diesen Dot
+            # herum so ein Kasten ... der muss weg".  Win11's DWM
+            # paints a subtle 1px outline / shadow around translucent
+            # tool windows by default.  NoDropShadowWindowHint asks the
+            # window manager to skip the drop shadow, which on Windows
+            # also removes the outline that made the dot look boxed-in.
+            | Qt.WindowType.NoDropShadowWindowHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        # v0.5.11: belt-and-braces — also disable the system background
+        # painting so no compositor fill leaks through the alpha layer
+        # on Win11 themes that ignore WA_TranslucentBackground partially.
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
 
         side = (self.DOT_RADIUS + self.PADDING) * 2
         self.resize(side, side)
@@ -397,39 +416,71 @@ class OrbOverlay(QWidget):
         self.update()
 
     def mousePressEvent(self, e) -> None:
-        # Right-click drag = move the orb.
+        # v0.5.11: left-click-drag on the dot itself = move the orb.
+        # Discoverable (just grab and move; right-click drag was a
+        # hidden gesture nobody knew about — TJ-report: "man muss den
+        # Dot in Custom Positions geben können").  We only START a
+        # potential drag here; the actual `move()` only kicks in once
+        # the cursor has travelled DRAG_THRESHOLD pixels, so a normal
+        # click on the dot (to interact with satellites later) doesn't
+        # accidentally re-position it.
+        cx = cy = self.DOT_RADIUS + self.PADDING
+        pos = e.position()
+        cx_mouse, cy_mouse = pos.x(), pos.y()
+        on_dot = math.hypot(cx_mouse - cx, cy_mouse - cy) <= self.DOT_RADIUS + 2
+
         if e.button() == Qt.MouseButton.RightButton:
+            # Right-click drag — kept as a power-user shortcut + back-compat.
             self._drag_origin = e.globalPosition().toPoint() - self.pos()
+            self._drag_started = True  # right-click drag is always immediate
             self.setCursor(Qt.CursorShape.SizeAllCursor)
+            return
+
+        if e.button() == Qt.MouseButton.LeftButton and on_dot:
+            # Set up a pending drag; only commits if user moves > threshold.
+            self._drag_origin = e.globalPosition().toPoint() - self.pos()
+            self._drag_press_pos = e.globalPosition().toPoint()
+            self._drag_started = False
             return
 
         # Only react to left-clicks on satellites when they're visible.
         if self._satellite_opacity < 0.4:
             return
-        cx = cy = self.DOT_RADIUS + self.PADDING
-        pos = e.position()
-        cx_mouse, cy_mouse = pos.x(), pos.y()
         for name, (sx, sy) in self._satellite_positions(cx, cy).items():
             if math.hypot(cx_mouse - sx, cy_mouse - sy) <= self.SAT_RADIUS + 2:
                 self._handle_satellite(name, sx, sy)
                 return
 
+    DRAG_THRESHOLD = 6  # pixels — distinguish click from drag
+
     def mouseMoveEvent(self, e) -> None:
         if self._drag_origin is not None:
+            # If we're still in "pending" mode (left-click), only start
+            # actually moving once cursor has travelled past the threshold.
+            if not getattr(self, "_drag_started", True):
+                if (e.globalPosition().toPoint() - self._drag_press_pos).manhattanLength() < self.DRAG_THRESHOLD:
+                    return
+                self._drag_started = True
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
             self.move(e.globalPosition().toPoint() - self._drag_origin)
             return
         super().mouseMoveEvent(e)
 
     def mouseReleaseEvent(self, e) -> None:
-        if self._drag_origin is not None and e.button() == Qt.MouseButton.RightButton:
+        if self._drag_origin is not None and e.button() in (
+            Qt.MouseButton.RightButton, Qt.MouseButton.LeftButton
+        ):
+            was_dragging = getattr(self, "_drag_started", True)
             self._drag_origin = None
+            self._drag_started = False
             self.setCursor(Qt.CursorShape.ArrowCursor)
-            screen = QApplication.screenAt(self.pos()) or QApplication.primaryScreen()
-            geom = screen.availableGeometry()
-            sx = self.x() - geom.x()
-            sy = self.y() - geom.y()
-            self.config.orb_position = f"custom-{sx}-{sy}"
-            self.config.save()
+            if was_dragging:
+                screen = QApplication.screenAt(self.pos()) or QApplication.primaryScreen()
+                geom = screen.availableGeometry()
+                sx = self.x() - geom.x()
+                sy = self.y() - geom.y()
+                self.config.orb_position = f"custom-{sx}-{sy}"
+                self.config.save()
             return
         super().mouseReleaseEvent(e)
 
