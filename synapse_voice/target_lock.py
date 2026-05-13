@@ -578,6 +578,19 @@ def _win_paste_keystroke() -> bool:
     Windows-on-ARM x64 emulation.  On native x64 this happened to work by
     chance because the kernel's parser only reads the KEYBDINPUT bytes
     when the type is INPUT_KEYBOARD, but that's not guaranteed.
+
+    v0.5.10 (Erik-report from v0.5.9): "manchmal pastet er 'V' statt
+    den Text".  Symptom: SendInput's Ctrl-down doesn't propagate
+    through Win-on-ARM's x64 emulation layer for non-native targets,
+    so the V key arrives without the modifier and the app inserts the
+    literal letter V.  Fix: include the hardware scancode for each
+    virtual key (`MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)`).  The Windows
+    input subsystem prefers scancode-bearing events for modifier-state
+    propagation through the emulation boundary — same workaround
+    AutoHotkey applies for "ARM-emulated app sees modifier-less keys".
+    Sending BOTH wVk and wScan (without KEYEVENTF_SCANCODE so VK is
+    still authoritative) is the cleanest path: emulated apps that need
+    the scancode get one, native apps that match on VK aren't broken.
     """
     import ctypes
     from ctypes import wintypes
@@ -588,6 +601,7 @@ def _win_paste_keystroke() -> bool:
     KEYEVENTF_KEYUP = 0x0002
     VK_CONTROL = 0x11
     VK_V = 0x56
+    MAPVK_VK_TO_VSC = 0
 
     # ULONG_PTR is pointer-sized — c_void_p picks the right width on every
     # arch (8 bytes on x64/arm64, 4 bytes on x86).
@@ -635,22 +649,28 @@ def _win_paste_keystroke() -> bool:
 
     user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
     user32.SendInput.restype = wintypes.UINT
+    user32.MapVirtualKeyW.argtypes = [wintypes.UINT, wintypes.UINT]
+    user32.MapVirtualKeyW.restype = wintypes.UINT
 
-    def make(vk: int, up: bool) -> "INPUT":
+    # Resolve scancodes once so we don't pay the syscall per make() call.
+    sc_ctrl = user32.MapVirtualKeyW(VK_CONTROL, MAPVK_VK_TO_VSC)
+    sc_v = user32.MapVirtualKeyW(VK_V, MAPVK_VK_TO_VSC)
+
+    def make(vk: int, scancode: int, up: bool) -> "INPUT":
         e = INPUT()
         e.type = INPUT_KEYBOARD
         e.ki.wVk = vk
-        e.ki.wScan = 0
+        e.ki.wScan = scancode  # v0.5.10: was 0, now real hardware scancode
         e.ki.dwFlags = KEYEVENTF_KEYUP if up else 0
         e.ki.time = 0
         e.ki.dwExtraInfo = None
         return e
 
     seq = (INPUT * 4)(
-        make(VK_CONTROL, False),
-        make(VK_V, False),
-        make(VK_V, True),
-        make(VK_CONTROL, True),
+        make(VK_CONTROL, sc_ctrl, False),
+        make(VK_V, sc_v, False),
+        make(VK_V, sc_v, True),
+        make(VK_CONTROL, sc_ctrl, True),
     )
     cb = ctypes.sizeof(INPUT)
     sent = user32.SendInput(4, seq, cb)
@@ -855,20 +875,41 @@ def _win_paste_attached(
         is_browser = _is_browser_class(focused_class)
         is_win_arm = _is_win_arm()
 
-        if is_browser and not is_win_arm:
-            # Win-x64 + browser: WM_PASTE → SendInput fallback.
+        # v0.5.10 (Erik-report from v0.5.9: "manchmal pastet er 'V' statt
+        # Text"): when we have a NON-browser captured focus, prefer
+        # WM_PASTE because it's modifier-free and 100% deterministic on
+        # Edit/RichEdit/Scintilla controls.  SendInput's Ctrl+V can drop
+        # the Ctrl modifier through Win-on-ARM x64 emulation, which then
+        # types the literal letter "V" into the input.  WM_PASTE has no
+        # such modifier-propagation risk — the receiver gets a direct
+        # "do a paste now" command from the OS message queue.
+        #
+        # Browsers still need their arch-specific path because their
+        # renderer process lives outside the captured-focus window and
+        # doesn't receive WM_PASTE the same way native controls do.
+        used_wm_paste_first = False
+        if focus_target and not is_browser:
+            if _win_send_paste(focus_target):
+                _log_paste(
+                    f"strategy WM_PASTE captured={focus_target} (preferred, modifier-free) → True"
+                )
+                pasted = True
+                used_wm_paste_first = True
+
+        if not pasted and is_browser and not is_win_arm:
+            # Win-x64 + browser: WM_PASTE on the outer HWND → SendInput fallback.
             if focused and _win_send_paste(focused):
                 _log_paste(f"strategy WM_PASTE focused={focused} (browser x64) → True")
                 pasted = True
             elif _win_paste_keystroke():
                 _log_paste("strategy SendInput (browser x64 fallback) → True")
                 pasted = True
-        else:
-            # Win-ARM (any target) OR non-browser: SendInput first.
-            # Belt-and-braces: even if SendInput reports success, on
-            # Win-ARM-browsers also follow up with WM_PASTE (cheap, no
-            # double-paste risk because Chromium's renderer dedupes
-            # identical paste commands within ~50ms).
+        elif not pasted:
+            # Win-ARM (any target) OR non-browser without a focus capture:
+            # SendInput first.  Belt-and-braces: even if SendInput reports
+            # success, on Win-ARM-browsers also follow up with WM_PASTE
+            # (cheap, no double-paste risk because Chromium's renderer
+            # dedupes identical paste commands within ~50ms).
             if _win_paste_keystroke():
                 _log_paste(
                     f"strategy SendInput (arm={is_win_arm}, browser={is_browser}) → True"
