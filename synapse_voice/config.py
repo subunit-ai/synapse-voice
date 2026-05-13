@@ -76,14 +76,21 @@ class Config:
     cleanup_auto_mode: bool = False
     auto_mode_overrides: dict = field(default_factory=dict)
 
-    # v0.6.0: Long-form mode (read.ai-inspired).  When a recording is
-    # at least `long_form_threshold_seconds` long, override the user's
-    # configured cleanup_style with `long_form_cleanup_style` for that
-    # one transcription.  Lets a single hotkey serve both short dictation
-    # ("send a Slack message") and long captures ("here's the meeting
-    # I just had").  Set the threshold to 0 to disable.
-    long_form_threshold_seconds: int = 60
-    long_form_cleanup_style: str = "summary"  # summary | action_items | minutes | decisions
+    # v0.6.0/v0.6.1: Long-form mode.  When a recording is at least
+    # `long_form_threshold_seconds` long, swap the cleanup style to
+    # `long_form_cleanup_style` for that one transcription.
+    #
+    # v0.6.1 (TJ-feedback msg 2868/2869):
+    #   - threshold raised 60s → 240s — 2-3 minute dictations are
+    #     normal and shouldn't get auto-summarised
+    #   - default style is now "raw" (no cleanup), not "summary" — TJ
+    #     wants long recordings as raw transcript so the Subunit App
+    #     can later extract summary / action items / calendar / decisions
+    #     downstream rather than the cleanup layer destroying the raw
+    #     content at capture time
+    # Set the threshold to 0 to disable the long-form auto-switch.
+    long_form_threshold_seconds: int = 240
+    long_form_cleanup_style: str = "raw"  # raw | summary | action_items | minutes | decisions
 
     # v0.3.29: Subunit Suite — Voice → Synapse Knowledge Base bridge.
     # When on, every transcript is POSTed to /v1/synapse/save after

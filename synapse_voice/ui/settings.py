@@ -428,16 +428,17 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self.row_auto_mode)
 
-        # v0.6.0: Long-form mode — for recordings longer than the
-        # threshold, override the cleanup style with a long-form one.
-        # Lets one hotkey serve both 5-second Slack messages and
-        # 20-minute meetings without manual style-switching.
+        # v0.6.0/v0.6.1: Long-form mode — for recordings longer than the
+        # threshold, override the cleanup style.  v0.6.1 defaults to
+        # "Raw" (no cleanup) so long captures stay as raw transcript;
+        # the user can opt in to summary/action_items if they want.
         layout.addSpacing(8)
         layout.addWidget(_section_title("Long-form mode"))
         layout.addWidget(_hint(
-            "Recordings longer than the threshold auto-apply a long-form "
-            "cleanup style (e.g. summary, action items).  Use it for "
-            "meetings and long monologues."
+            "Recordings longer than the threshold switch to a different "
+            "cleanup style. Default: 'Raw' — keep the full transcript with "
+            "no AI rewrite, so you don't lose content on a long dictation. "
+            "Set threshold to 0 to disable the switch."
         ))
 
         lf_row = QHBoxLayout()
@@ -447,19 +448,20 @@ class SettingsDialog(QDialog):
         self.long_form_threshold_spin.setRange(0, 3600)
         self.long_form_threshold_spin.setSuffix(" s")
         self.long_form_threshold_spin.setValue(
-            int(getattr(self.config, "long_form_threshold_seconds", 60) or 0)
+            int(getattr(self.config, "long_form_threshold_seconds", 240) or 0)
         )
         self.long_form_threshold_spin.setSpecialValueText("disabled")
         lf_row.addWidget(self.long_form_threshold_spin)
         lf_row.addSpacing(12)
         lf_row.addWidget(QLabel("→ apply"))
         self.long_form_style_combo = QComboBox()
+        self.long_form_style_combo.addItem("Raw — keep full transcript, no cleanup", "raw")
         self.long_form_style_combo.addItem("Summary", "summary")
         self.long_form_style_combo.addItem("Action Items", "action_items")
         self.long_form_style_combo.addItem("Minutes (Protokoll)", "minutes")
         self.long_form_style_combo.addItem("Decisions", "decisions")
         lf_idx = self.long_form_style_combo.findData(
-            getattr(self.config, "long_form_cleanup_style", "summary") or "summary"
+            getattr(self.config, "long_form_cleanup_style", "raw") or "raw"
         )
         if lf_idx >= 0:
             self.long_form_style_combo.setCurrentIndex(lf_idx)
@@ -1137,7 +1139,7 @@ class SettingsDialog(QDialog):
             config.long_form_threshold_seconds = int(self.long_form_threshold_spin.value())
         if hasattr(self, "long_form_style_combo"):
             config.long_form_cleanup_style = (
-                self.long_form_style_combo.currentData() or "summary"
+                self.long_form_style_combo.currentData() or "raw"
             )
         if hasattr(self, "auto_table"):
             config.auto_mode_overrides = self._harvest_auto_overrides()
