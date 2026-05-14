@@ -91,6 +91,9 @@ class TranscribeWorker(QObject):
         try:
             transcriber = get_transcriber(self._mode, self._config)
             text = transcriber.transcribe(self._audio, language=self._config.language)
+            # Style is also used by the Meetings persistence below; initialise
+            # it before the cleanup block so it is always defined.
+            style = self._config.cleanup_style or "prompt"
             # AI cleanup-layer (best-effort, never blocks the result).
             if text and self._config.cleanup_enabled:
                 from .cleanup_client import cleanup_text
@@ -98,7 +101,6 @@ class TranscribeWorker(QObject):
                 # v0.3.25: Auto-Mode — derive style from the active
                 # window if enabled. Falls back to the user's manual
                 # cleanup_style if no rule matched.
-                style = self._config.cleanup_style or "prompt"
                 if self._config.cleanup_auto_mode and self._window_title:
                     from . import auto_mode
 
@@ -170,6 +172,11 @@ class TranscribeWorker(QObject):
                 and self._config.subunit_api_key
             ):
                 self._save_to_synapse(text)
+            # v0.7.0 — persist long-form recordings as Meetings so they show
+            # up in the Meetings tab and can be revisited / acted on.
+            if text and self._audio is not None:
+                duration_s = float(self._audio.shape[0]) / 16000.0
+                self._maybe_persist_meeting(text=text, duration_s=duration_s, style_used=style)
             self.finished.emit(text)
         except TranscriberError as e:
             _log.error("Transcribe failed (mode=%s): %s", self._mode, e)
@@ -222,6 +229,46 @@ class TranscribeWorker(QObject):
         except Exception as e:
             _log.warning("Synapse save failed (non-fatal): %s", e)
 
+    def _maybe_persist_meeting(self, *, text: str, duration_s: float, style_used: str) -> None:
+        """Save long-form recordings to the Meetings store.
+
+        A recording is considered a "meeting" if its duration meets or exceeds
+        ``Config.long_form_threshold_seconds``. Short dictations are not
+        persisted — they live in the regular history list.
+
+        Best-effort: any I/O error is logged and swallowed so the paste path
+        is never blocked by storage problems.
+        """
+        try:
+            threshold = max(0, getattr(self._config, "long_form_threshold_seconds", 60) or 0)
+            if threshold <= 0 or duration_s < threshold:
+                return
+            from .meetings import MeetingsStore, detect_source_from_window_title
+            store = MeetingsStore()
+            cleanup_versions: dict = {}
+            # The raw transcribed text from Whisper goes into transcript_raw.
+            # If the cleanup style was anything other than "raw"/"prompt", the
+            # post-cleanup ``text`` is also a usable rendering — cache it under
+            # the style name so the user can flip between versions without
+            # re-calling the cleanup endpoint.
+            if style_used and style_used not in ("raw", "prompt") and text:
+                cleanup_versions[style_used] = text
+            meeting = store.create(
+                transcript_raw=text,
+                duration_seconds=duration_s,
+                language=self._config.language or "",
+                source=detect_source_from_window_title(self._window_title),
+                window_title=(self._window_title or "")[:200],
+                cleanup_versions=cleanup_versions,
+                metadata={
+                    "style_used": style_used,
+                    "mode": self._mode,
+                },
+            )
+            _log.info("Meeting persisted: id=%s duration=%.1fs", meeting.id, duration_s)
+        except Exception as e:
+            _log.warning("Failed to persist meeting (non-fatal): %s", e)
+
 
 class SynapseVoiceApp(QObject):
     request_toggle = pyqtSignal()  # marshals hotkey thread → Qt main thread (toggle mode)
@@ -261,12 +308,14 @@ class SynapseVoiceApp(QObject):
             on_change_mode=self.change_mode,
             on_open_settings=self.open_settings,
             on_open_history=self.open_history,
+            on_open_meetings=self.open_meetings,
             on_quit=self.quit,
         )
         self.tray = Tray(
             on_toggle_record=self.toggle_record,
             on_open_settings=self.open_settings,
             on_open_history=self.open_history,
+            on_open_meetings=self.open_meetings,
             on_open_window=self.open_window,
             on_change_mode=self.change_mode,
             on_quit=self.quit,
@@ -761,6 +810,12 @@ class SynapseVoiceApp(QObject):
             )
 
         dlg = HistoryDialog(self.config, on_repaste=repaste)
+        dlg.exec()
+
+    def open_meetings(self) -> None:
+        """Open the Meetings browser (long-form recordings, task extraction)."""
+        from .ui.meetings import MeetingsDialog
+        dlg = MeetingsDialog(self.config)
         dlg.exec()
 
     def change_mode(self, mode: str) -> None:

@@ -38,6 +38,7 @@ class Tray(QSystemTrayIcon):
         on_change_mode: Callable[[str], None],
         on_quit: Callable[[], None],
         current_mode: str,
+        on_open_meetings: Callable[[], None] | None = None,
     ) -> None:
         super().__init__()
         self._icons = {
@@ -89,6 +90,11 @@ class Tray(QSystemTrayIcon):
         self._history_action = QAction("History…", self._menu)
         self._history_action.triggered.connect(lambda: on_open_history())
         self._menu.addAction(self._history_action)
+
+        if on_open_meetings is not None:
+            self._meetings_action = QAction("Meetings…", self._menu)
+            self._meetings_action.triggered.connect(lambda: on_open_meetings())
+            self._menu.addAction(self._meetings_action)
 
         self._settings_action = QAction("Settings…", self._menu)
         self._settings_action.triggered.connect(lambda: on_open_settings())

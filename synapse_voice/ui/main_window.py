@@ -276,12 +276,14 @@ class MainWindow(QMainWindow):
         on_open_settings: Callable[[], None],
         on_open_history: Callable[[], None],
         on_quit: Callable[[], None],
+        on_open_meetings: Callable[[], None] | None = None,
     ) -> None:
         super().__init__()
         self.config = config
         self._on_change_mode = on_change_mode
         self._on_open_settings = on_open_settings
         self._on_open_history = on_open_history
+        self._on_open_meetings = on_open_meetings
         self._on_quit = on_quit
 
         self.setWindowTitle("Sonar")
@@ -423,6 +425,12 @@ class MainWindow(QMainWindow):
         footer.setSpacing(10)
         history_btn = QPushButton("Full history…")
         history_btn.clicked.connect(lambda: self._on_open_history())
+        meetings_btn = QPushButton("Meetings…")
+        meetings_btn.setToolTip("Browse long-form recordings, extract tasks + decisions.")
+        if self._on_open_meetings is not None:
+            meetings_btn.clicked.connect(lambda: self._on_open_meetings())
+        else:
+            meetings_btn.setEnabled(False)
         settings_btn = QPushButton("Settings…")
         settings_btn.clicked.connect(lambda: self._on_open_settings())
         hide_btn = QPushButton("Hide to tray")
@@ -430,6 +438,7 @@ class MainWindow(QMainWindow):
         quit_btn = QPushButton("Quit")
         quit_btn.clicked.connect(lambda: self._on_quit())
         footer.addWidget(history_btn)
+        footer.addWidget(meetings_btn)
         footer.addWidget(settings_btn)
         footer.addStretch()
         footer.addWidget(hide_btn)
