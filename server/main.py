@@ -33,6 +33,7 @@ from pydantic import BaseModel, EmailStr
 import accounts as _accounts
 import cleanup as _cleanup_mod
 import diarize_endpoint as _diarize_mod
+import meet_endpoints as _meet_mod
 import email_send as _email_send
 
 MODEL_NAME = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
@@ -130,7 +131,12 @@ async def root():
         "service": "transcribe.subunit.ai",
         "version": "0.1.0",
         "model": MODEL_NAME,
-        "endpoints": ["POST /v1/transcribe", "POST /v1/cleanup", "POST /v1/diarize", "GET /v1/health"],
+        "endpoints": [
+            "POST /v1/transcribe", "POST /v1/cleanup", "POST /v1/diarize",
+            "POST /v1/meetings", "GET /v1/meetings/<code>/info",
+            "POST /v1/meetings/<code>/join",
+            "GET /v1/health",
+        ],
     }
 
 
@@ -314,6 +320,121 @@ async def diarize_endpoint(
             pass
 
     return JSONResponse(result)
+
+
+# ── Meetings (QR-Check-In foundation, MVP) ────────────────────────────────
+#
+# 2026-05-14 (codex top 4 + TJ killer-idea): consent-by-join meeting
+# sessions. Sonar-Desktop posts /v1/meetings to allocate a code, then
+# shows QR + numeric code. Participants visit meet.subunit.ai, scan or
+# type the code, enter name + email, and the server registers them
+# in the session. WebRTC streaming + per-stream recording comes in
+# Phase 2.
+
+class CreateMeetingRequest(BaseModel):
+    host_name: str
+    host_email: str | None = None
+    title: str | None = None
+
+
+class JoinMeetingRequest(BaseModel):
+    name: str
+    email: str
+    source: str | None = "web"
+    token: str | None = None  # reserved for shared-link auth in phase 2
+
+
+@app.post("/v1/meetings")
+async def create_meeting(
+    req: CreateMeetingRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    """Host creates a meeting session. Requires a Subunit API key
+    (gated like /v1/transcribe — meetings are a paid feature surface)."""
+    caller = _resolve_caller(x_api_key)
+    _require_active_access(caller)
+    if not req.host_name.strip():
+        raise HTTPException(status_code=400, detail="host_name required")
+    payload = _meet_mod.create_meeting(
+        host_name=req.host_name,
+        host_email=req.host_email,
+        title=req.title,
+        api_key=caller["api_key"] if caller else None,
+    )
+    print(
+        f"[meet] created code={payload['code']} host={req.host_name[:32]}",
+        flush=True,
+    )
+    return JSONResponse(payload)
+
+
+@app.get("/v1/meetings/{code}/info")
+async def meeting_info(code: str):
+    """Public lookup for the meet.subunit.ai landing page (no auth).
+    Only returns non-sensitive fields: title, host name, status."""
+    if not code.isdigit() or len(code) != 6:
+        raise HTTPException(status_code=400, detail="invalid code")
+    info = _meet_mod.get_meeting_info(code)
+    if not info:
+        raise HTTPException(status_code=404, detail="meeting not found")
+    return JSONResponse(info)
+
+
+@app.post("/v1/meetings/{code}/join")
+async def join_meeting(code: str, req: JoinMeetingRequest):
+    """Guest joins. No auth — anyone with the code can join (that's
+    the whole point). Returns a join_token the guest can use later to
+    fetch their recap email."""
+    if not code.isdigit() or len(code) != 6:
+        raise HTTPException(status_code=400, detail="invalid code")
+    result = _meet_mod.join_meeting(
+        code,
+        name=req.name,
+        email=req.email,
+        source=req.source or "web",
+    )
+    if not result:
+        raise HTTPException(status_code=400, detail="cannot join (meeting ended or invalid name/email)")
+    print(
+        f"[meet] join code={code} name={req.name[:32]} src={req.source}",
+        flush=True,
+    )
+    return JSONResponse(result)
+
+
+@app.get("/v1/meetings/{code}/participants")
+async def list_participants(
+    code: str,
+    host_token: str = "",
+):
+    """Host polls for the live check-in list. Authenticated via
+    host_token (returned at meeting creation)."""
+    if not code.isdigit() or len(code) != 6:
+        raise HTTPException(status_code=400, detail="invalid code")
+    if not host_token:
+        raise HTTPException(status_code=401, detail="host_token required")
+    participants = _meet_mod.list_participants(code, host_token)
+    if participants is None:
+        raise HTTPException(status_code=403, detail="invalid host_token or meeting not found")
+    return JSONResponse({"participants": participants, "count": len(participants)})
+
+
+@app.post("/v1/meetings/{code}/start")
+async def start_meeting(code: str, host_token: str = ""):
+    if not code.isdigit() or len(code) != 6:
+        raise HTTPException(status_code=400, detail="invalid code")
+    if not _meet_mod.start_meeting(code, host_token):
+        raise HTTPException(status_code=403, detail="invalid host_token or meeting not found")
+    return JSONResponse({"ok": True, "status": "recording"})
+
+
+@app.post("/v1/meetings/{code}/end")
+async def end_meeting(code: str, host_token: str = ""):
+    if not code.isdigit() or len(code) != 6:
+        raise HTTPException(status_code=400, detail="invalid code")
+    if not _meet_mod.end_meeting(code, host_token):
+        raise HTTPException(status_code=403, detail="invalid host_token or meeting not found")
+    return JSONResponse({"ok": True, "status": "ended"})
 
 
 # ── Subunit Suite Integration: Voice → Synapse Knowledge Base ─────────────

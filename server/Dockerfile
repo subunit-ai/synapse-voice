@@ -34,7 +34,7 @@ RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('${WHISPER
 # at request time (which can be slow + flaky from EU servers).
 RUN python3 -c "import wespeakerruntime as ws; ws.Speaker(lang='en')"
 
-COPY main.py accounts.py cleanup.py email_send.py diarize_endpoint.py /app/
+COPY main.py accounts.py cleanup.py email_send.py diarize_endpoint.py meet_endpoints.py /app/
 
 # Persistent storage for the accounts SQLite db
 VOLUME ["/data"]
