@@ -45,6 +45,7 @@ _log = logging.getLogger(__name__)
 # (raw is always available as it's the persisted transcript itself.)
 STYLE_LABELS: list[tuple[str, str]] = [
     ("raw", "Raw transcript"),
+    ("speaker_transcript", "Speakers (diarized)"),
     ("summary", "Summary"),
     ("action_items", "Action items"),
     ("minutes", "Minutes"),
@@ -496,6 +497,27 @@ class MeetingsDialog(QDialog):
         cached = (self._current.cleanup_versions or {}).get(style)
         if cached and not force_regen:
             self.body.setPlainText(cached)
+            return
+        # 2026-05-14: speaker_transcript is locally-generated post-diarize,
+        # not a server-side cleanup style. If no cached version exists,
+        # tell the user instead of POSTing to /v1/cleanup with an unknown
+        # style.
+        if style == "speaker_transcript":
+            num = (self._current.metadata or {}).get("diarize_num_speakers")
+            if num:
+                self.body.setPlainText(
+                    f"Diarization detected {num} speaker(s) but the speaker-tagged "
+                    "transcript hasn't been cached for this meeting yet. Open this "
+                    "meeting in a session where 'Speaker-Erkennung' is enabled, or "
+                    "record a new meeting."
+                )
+            else:
+                self.body.setPlainText(
+                    "Speaker diarization has not been run on this meeting.\n\n"
+                    "Enable it in Settings → Account → 'Speaker-Erkennung (Cloud)' "
+                    "and record a new meeting (≥4 min). Diarization runs server-side "
+                    "after the recording finishes."
+                )
             return
         self.body.setPlainText(f"⏳ Generating {style} via AI…")
         # Run cleanup off the UI thread

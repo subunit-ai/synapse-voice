@@ -68,6 +68,17 @@ class Config:
     #   "classic" — minimal cyan dot (Bubble-era throwback)
     orb_overlay_style: str = "sphere"
 
+    # v0.8.0 (Codex Top 1): Speaker diarization for long-form recordings.
+    # Server-side via transcribe.subunit.ai /v1/diarize — bundles the
+    # 600MB torch/diarize stack we don't want in the AppImage. Only runs
+    # for recordings >= long_form_threshold_seconds, and only when the
+    # user is paired with a Subunit account (uses the same X-API-Key as
+    # cleanup). Off by default — opt-in toggle in Settings → Account.
+    diarization_enabled: bool = False
+    # Optional ceiling for the spectral-clustering speaker count. Most
+    # client meetings are 2-6 people; 8 is a sensible default ceiling.
+    diarization_max_speakers: int = 8
+
     # v0.3.0: AI cleanup layer (default off — TJ-pref)
     cleanup_enabled: bool = False
     # v0.3.24: default style flipped from tidy → prompt because Sonar's

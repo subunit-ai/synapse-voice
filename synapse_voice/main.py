@@ -266,8 +266,125 @@ class TranscribeWorker(QObject):
                 },
             )
             _log.info("Meeting persisted: id=%s duration=%.1fs", meeting.id, duration_s)
+
+            # v0.8.0 (Codex Top 1): kick off speaker diarization in a
+            # background thread. The Meeting is already saved with the
+            # raw transcript — diarization adds a speaker-tagged version
+            # to ``cleanup_versions`` when it returns. UI will show it
+            # in the style picker. Best-effort: failures are logged.
+            if (
+                self._config.diarization_enabled
+                and self._config.subunit_api_key
+                and self._audio is not None
+                and self._audio.size > 0
+            ):
+                self._kick_off_diarization(meeting.id, self._audio.copy())
         except Exception as e:
             _log.warning("Failed to persist meeting (non-fatal): %s", e)
+
+    def _kick_off_diarization(self, meeting_id: str, audio: "np.ndarray") -> None:
+        """Run diarization on a background thread; update the Meeting on completion."""
+        import threading
+
+        def _worker() -> None:
+            try:
+                from .diarization_client import (
+                    diarize_pcm,
+                    merge_whisper_with_speakers,
+                    format_speaker_transcript,
+                )
+                _log.info("Diarization starting for meeting %s …", meeting_id)
+                segments = diarize_pcm(
+                    audio,
+                    sample_rate=16000,
+                    transcribe_endpoint=self._config.subunit_endpoint,
+                    api_key=self._config.subunit_api_key,
+                    max_speakers=self._config.diarization_max_speakers,
+                )
+                if not segments:
+                    _log.info("Diarization returned no segments for %s", meeting_id)
+                    return
+                # We don't have Whisper segments locally — fall back to
+                # rendering pure speaker time-ranges as a "transcript".
+                speakers_only = format_speaker_transcript([])  # empty without whisper
+                # Rough text fallback: just list the speaker ranges. The
+                # client-side merge with Whisper segments would need them
+                # from the transcribe call; v0.8.0 stays simple and just
+                # tags the raw transcript with speaker labels in metadata.
+                from .meetings import MeetingsStore
+                store = MeetingsStore()
+                m = store.get(meeting_id)
+                if not m:
+                    return
+                segments_json = [
+                    {"start_s": s.start_s, "end_s": s.end_s, "speaker": s.speaker}
+                    for s in segments
+                ]
+                m.metadata["diarize_segments"] = segments_json
+                m.metadata["diarize_num_speakers"] = len({s.speaker for s in segments})
+                # Build a simple speaker-tagged rendering of the raw transcript
+                # by chunking the transcript into segments matching the speaker
+                # time ranges' duration ratios. Best-effort.
+                tagged = _approximate_speaker_transcript(m.transcript_raw, segments)
+                if tagged:
+                    m.cleanup_versions["speaker_transcript"] = tagged
+                store.update(m)
+                _log.info(
+                    "Diarization done for %s: %d speakers, %d segments",
+                    meeting_id, m.metadata["diarize_num_speakers"], len(segments),
+                )
+            except Exception as e:
+                _log.warning("Diarization worker failed for %s: %s", meeting_id, e)
+
+        t = threading.Thread(target=_worker, name=f"diarize-{meeting_id[:8]}", daemon=True)
+        t.start()
+
+
+def _approximate_speaker_transcript(transcript_raw: str, segments: list) -> str:
+    """Heuristic: distribute the raw transcript across speaker time ranges by duration.
+
+    Since the local client only has the joined transcript (no per-segment
+    text from Whisper), we sentence-split and divide by total speech
+    duration. This is imperfect but readable — good enough for v0.8.0
+    until we add segment-level streaming.
+    """
+    import re
+
+    if not transcript_raw or not segments:
+        return ""
+    # Sort speaker segments by start time
+    sorted_segs = sorted(segments, key=lambda s: s.start_s)
+    total_duration = sum(max(0.0, s.end_s - s.start_s) for s in sorted_segs) or 1.0
+
+    # Split transcript into sentences (keeping punctuation).
+    sentences = re.split(r"(?<=[.!?])\s+", transcript_raw.strip())
+    sentences = [s.strip() for s in sentences if s.strip()]
+    if not sentences:
+        return ""
+
+    # Distribute sentences among speakers proportional to their cumulative
+    # speech duration (very rough — sentence count ≠ word count, but the
+    # output is acceptable until we wire segment-level text).
+    out_lines: list[str] = []
+    sentence_idx = 0
+    cumulative_count = 0
+    for seg in sorted_segs:
+        share = (seg.end_s - seg.start_s) / total_duration
+        chunk_size = max(1, round(share * len(sentences)))
+        chunk = sentences[sentence_idx : sentence_idx + chunk_size]
+        if chunk:
+            out_lines.append(f"{seg.speaker}: " + " ".join(chunk))
+            sentence_idx += chunk_size
+            cumulative_count += chunk_size
+        if sentence_idx >= len(sentences):
+            break
+
+    # Append any leftover sentences to the last speaker
+    if sentence_idx < len(sentences) and out_lines:
+        last = out_lines[-1]
+        out_lines[-1] = last + " " + " ".join(sentences[sentence_idx:])
+
+    return "\n\n".join(out_lines)
 
 
 class SynapseVoiceApp(QObject):

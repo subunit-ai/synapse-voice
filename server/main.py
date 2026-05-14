@@ -32,6 +32,7 @@ from pydantic import BaseModel, EmailStr
 
 import accounts as _accounts
 import cleanup as _cleanup_mod
+import diarize_endpoint as _diarize_mod
 import email_send as _email_send
 
 MODEL_NAME = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
@@ -129,7 +130,7 @@ async def root():
         "service": "transcribe.subunit.ai",
         "version": "0.1.0",
         "model": MODEL_NAME,
-        "endpoints": ["POST /v1/transcribe", "GET /v1/health"],
+        "endpoints": ["POST /v1/transcribe", "POST /v1/cleanup", "POST /v1/diarize", "GET /v1/health"],
     }
 
 
@@ -147,6 +148,7 @@ async def transcribe(
     file: UploadFile = File(...),
     language: str = Form("de"),
     prompt: str = Form(""),
+    with_segments: bool = Form(False),
     x_api_key: str | None = Header(default=None),
 ):
     caller = _resolve_caller(x_api_key)
@@ -175,14 +177,20 @@ async def transcribe(
     # v0.6.0: "auto" or empty language → let faster-whisper detect
     # the language per utterance.  Useful for mixed-language meetings.
     lang_arg = None if language in ("", "auto", None) else language
-    segments, info = model.transcribe(
+    segments_iter, info = model.transcribe(
         audio,
         language=lang_arg,
         initial_prompt=initial_prompt,
         beam_size=5,
         vad_filter=True,
     )
-    text = " ".join(seg.text.strip() for seg in segments).strip()
+    # 2026-05-14: materialise segments so we can both join text AND
+    # return them with timestamps when the client asks (v0.8.0 diarization).
+    materialised = [
+        {"start": float(s.start), "end": float(s.end), "text": s.text.strip()}
+        for s in segments_iter
+    ]
+    text = " ".join(s["text"] for s in materialised if s["text"]).strip()
     elapsed = time.time() - t0
     # Don't log transcript content — these are user dictations and may
     # contain passwords / PII / IP. Size + duration is enough for ops.
@@ -198,15 +206,16 @@ async def transcribe(
         except Exception:
             pass
 
-    return JSONResponse(
-        {
-            "text": text,
-            "language": info.language,
-            "duration_s": info.duration,
-            "elapsed_s": round(elapsed, 3),
-            "model": MODEL_NAME,
-        }
-    )
+    response = {
+        "text": text,
+        "language": info.language,
+        "duration_s": info.duration,
+        "elapsed_s": round(elapsed, 3),
+        "model": MODEL_NAME,
+    }
+    if with_segments:
+        response["segments"] = materialised
+    return JSONResponse(response)
 
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
@@ -243,6 +252,68 @@ async def cleanup_endpoint(
             pass
 
     return JSONResponse({"text": cleaned, "style": req.style})
+
+
+# ── Diarization ───────────────────────────────────────────────────────────
+#
+# 2026-05-14 (codex top-1 priority): speaker-tagged meeting transcripts.
+# Bundling diarize+torch into the desktop app would balloon Sonar from
+# 214MB → 1GB+, so we run it server-side on the GPU host instead. The
+# DSGVO surface stays the same as cloud Whisper: audio reaches Hamburg,
+# is processed in-memory, no retention.
+
+MAX_DIARIZE_MB = int(os.environ.get("MAX_DIARIZE_MB", "200"))
+
+
+@app.post("/v1/diarize")
+async def diarize_endpoint(
+    file: UploadFile = File(...),
+    num_speakers: int | None = Form(default=None),
+    max_speakers: int = Form(default=8),
+    x_api_key: str | None = Header(default=None),
+):
+    """Speaker diarization for long-form recordings.
+
+    Returns a JSON array of {start_s, end_s, speaker} segments. The
+    client merges these with Whisper segments on its side.
+    """
+    caller = _resolve_caller(x_api_key)
+    _require_active_access(caller)
+
+    payload = await file.read()
+    if len(payload) > MAX_DIARIZE_MB * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail=f"audio too large (max {MAX_DIARIZE_MB}MB)",
+        )
+    if not payload:
+        raise HTTPException(status_code=400, detail="empty audio")
+
+    try:
+        result = _diarize_mod.diarize_audio_bytes(
+            payload,
+            num_speakers=num_speakers,
+            max_speakers=max_speakers,
+        )
+    except Exception as e:
+        # diarize raises on corrupt audio / model load errors.
+        raise HTTPException(status_code=502, detail=f"diarize_failed: {e}")
+
+    print(
+        f"[diarize] {len(payload) / 1024:.1f}KB · "
+        f"{result['num_speakers']} speakers · "
+        f"{len(result['segments'])} segments · "
+        f"{result['elapsed_s']}s",
+        flush=True,
+    )
+
+    if caller is not None:
+        try:
+            _accounts.record_usage(caller["api_key"], "diarize", float(result["elapsed_s"]))
+        except Exception:
+            pass
+
+    return JSONResponse(result)
 
 
 # ── Subunit Suite Integration: Voice → Synapse Knowledge Base ─────────────

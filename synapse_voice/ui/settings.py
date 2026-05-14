@@ -1030,6 +1030,17 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self.row_synapse_save)
 
+        # 2026-05-14 (v0.8.0, codex top 1): speaker diarization.
+        self.row_diarization = _ToggleRow(
+            "Speaker-Erkennung (Cloud)",
+            "Erkenne automatisch wer im Meeting wann gesprochen hat. "
+            "Läuft auf transcribe.subunit.ai (Hamburg) — selbe DSGVO-Surface "
+            "wie Cloud-Transkription. Aktiviert sich automatisch für "
+            "Meetings ≥ 4 Minuten. Erfordert gültigen Subunit API-Key.",
+            self.config.diarization_enabled,
+        )
+        layout.addWidget(self.row_diarization)
+
         # 2026-05-14 (codex review #5): make DSGVO concrete and visible in
         # the product instead of leaving it as a brand claim. EU buyers
         # ask for these facts every time — surface them so they don't
@@ -1301,6 +1312,8 @@ class SettingsDialog(QDialog):
             config.auto_mode_overrides = self._harvest_auto_overrides()
         if hasattr(self, "row_synapse_save"):
             config.synapse_save_enabled = self.row_synapse_save.is_on()
+        if hasattr(self, "row_diarization"):
+            config.diarization_enabled = self.row_diarization.is_on()
         config.auto_update_check = self.row_auto_update.is_on()
 
         config.subunit_endpoint = (
