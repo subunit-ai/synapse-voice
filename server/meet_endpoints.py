@@ -26,14 +26,46 @@ import secrets
 import string
 import threading
 import time
+from pathlib import Path
 from typing import Optional
 
 
-# Lock-protected in-memory store. Production will move to Postgres
-# alongside auth.subunit.ai; for the MVP we accept that meetings vanish
-# on server restart.
+# Lock-protected in-memory store with JSON-file persistence. Each mutation
+# writes the full store back atomically so meetings survive restarts. The
+# proper Postgres migration happens once the WebRTC + per-stream-recording
+# pipeline lands; the file store is fine for the session-management MVP.
 _LOCK = threading.RLock()
 _MEETINGS: dict[str, dict] = {}  # code → meeting dict
+_STORE_PATH = Path(os.environ.get("MEET_STORE_PATH", "/data/meetings.json"))
+
+
+def _load_from_disk() -> None:
+    """Populate _MEETINGS from the JSON file at startup. Best-effort."""
+    global _MEETINGS
+    try:
+        if _STORE_PATH.exists():
+            with _STORE_PATH.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    _MEETINGS = data
+                    print(f"[meet] loaded {len(_MEETINGS)} meetings from {_STORE_PATH}", flush=True)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"[meet] could not load store: {e}", flush=True)
+
+
+def _save_to_disk() -> None:
+    """Snapshot _MEETINGS to disk. Called inside the lock for consistency."""
+    try:
+        _STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _STORE_PATH.with_suffix(".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(_MEETINGS, f, ensure_ascii=False, indent=0)
+        tmp.replace(_STORE_PATH)
+    except OSError as e:
+        print(f"[meet] could not save store: {e}", flush=True)
+
+
+_load_from_disk()
 
 
 def _gen_code() -> str:
@@ -83,6 +115,7 @@ def create_meeting(
     }
     with _LOCK:
         _MEETINGS[code] = meeting
+        _save_to_disk()
     return _public_view_for_host(meeting)
 
 
@@ -122,6 +155,7 @@ def join_meeting(code: str, *, name: str, email: str, source: str = "web") -> Op
             "source": source,  # web | qr | code | host
         }
         m["participants"].append(participant)
+        _save_to_disk()
         return {
             "join_token": token,
             "name": participant["name"],
@@ -155,6 +189,7 @@ def start_meeting(code: str, host_token: str) -> bool:
             return False
         m["status"] = "recording"
         m["started_at"] = _now()
+        _save_to_disk()
     return True
 
 
@@ -165,6 +200,7 @@ def end_meeting(code: str, host_token: str) -> bool:
             return False
         m["status"] = "ended"
         m["ended_at"] = _now()
+        _save_to_disk()
     return True
 
 
@@ -175,8 +211,8 @@ def _public_view_for_host(m: dict) -> dict:
         "title": m["title"],
         "host_token": m["host_token"],
         "created_at": _format_created(m["created_at"]),
-        "share_url": f"https://subunit.ai/meet/{m['code']}",
-        "join_url": f"https://subunit.ai/meet/{m['code']}",
+        "share_url": f"https://meet.subunit.ai/{m['code']}",
+        "join_url": f"https://meet.subunit.ai/{m['code']}",
     }
 
 

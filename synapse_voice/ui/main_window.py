@@ -277,6 +277,7 @@ class MainWindow(QMainWindow):
         on_open_history: Callable[[], None],
         on_quit: Callable[[], None],
         on_open_meetings: Callable[[], None] | None = None,
+        on_start_meeting: Callable[[], None] | None = None,
     ) -> None:
         super().__init__()
         self.config = config
@@ -284,6 +285,7 @@ class MainWindow(QMainWindow):
         self._on_open_settings = on_open_settings
         self._on_open_history = on_open_history
         self._on_open_meetings = on_open_meetings
+        self._on_start_meeting = on_start_meeting
         self._on_quit = on_quit
 
         self.setWindowTitle("Sonar")
@@ -431,6 +433,16 @@ class MainWindow(QMainWindow):
             meetings_btn.clicked.connect(lambda: self._on_open_meetings())
         else:
             meetings_btn.setEnabled(False)
+        # v0.9.0: Host a multi-participant meeting via meet.subunit.ai.
+        start_meeting_btn = QPushButton("🔴 Meeting starten…")
+        start_meeting_btn.setToolTip(
+            "QR-Code + 6-Stellen-Code generieren, Teilnehmer checken via "
+            "meet.subunit.ai ein. DSGVO-konformer Multi-Sprecher-Modus."
+        )
+        if self._on_start_meeting is not None:
+            start_meeting_btn.clicked.connect(lambda: self._on_start_meeting())
+        else:
+            start_meeting_btn.setEnabled(False)
         settings_btn = QPushButton("Settings…")
         settings_btn.clicked.connect(lambda: self._on_open_settings())
         hide_btn = QPushButton("Hide to tray")
@@ -439,6 +451,7 @@ class MainWindow(QMainWindow):
         quit_btn.clicked.connect(lambda: self._on_quit())
         footer.addWidget(history_btn)
         footer.addWidget(meetings_btn)
+        footer.addWidget(start_meeting_btn)
         footer.addWidget(settings_btn)
         footer.addStretch()
         footer.addWidget(hide_btn)

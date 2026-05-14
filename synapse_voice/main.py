@@ -426,6 +426,7 @@ class SynapseVoiceApp(QObject):
             on_open_settings=self.open_settings,
             on_open_history=self.open_history,
             on_open_meetings=self.open_meetings,
+            on_start_meeting=self.start_meeting,
             on_quit=self.quit,
         )
         self.tray = Tray(
@@ -933,6 +934,24 @@ class SynapseVoiceApp(QObject):
         """Open the Meetings browser (long-form recordings, task extraction)."""
         from .ui.meetings import MeetingsDialog
         dlg = MeetingsDialog(self.config)
+        dlg.exec()
+
+    def start_meeting(self) -> None:
+        """Open the Meeting-Host modal — generate a QR + 6-digit code for
+        the Subunit Meet PWA, watch participants check in live, and
+        start/end the recording. (v0.9.0)
+        """
+        if not self.config.subunit_api_key:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self.main_window,
+                "Subunit-Anmeldung erforderlich",
+                "Du brauchst einen Subunit-Account um Meetings zu hosten.\n\n"
+                "Öffne Settings → Account → 'Get my Subunit key' und log dich ein.",
+            )
+            return
+        from .ui.meeting_host import MeetingHostDialog
+        dlg = MeetingHostDialog(self.config, parent=self.main_window)
         dlg.exec()
 
     def change_mode(self, mode: str) -> None:

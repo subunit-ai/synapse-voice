@@ -5,6 +5,9 @@ scipy>=1.12
 pynput>=1.7
 requests>=2.31
 psutil>=5.9
+# v0.9.0: QR-Code rendering for the Meeting-Start modal. Pure-Python
+# lib with a pillow dependency for PNG output (~50KB).
+qrcode[pil]>=8.0
 # Local transcription backends — split by platform.
 #   x86_64 + Linux/macOS ARM64: faster-whisper (ctranslate2-backed, fastest path).
 #   Windows ARM64: onnx-asr (ctranslate2 has no Win-ARM64 wheel as of 2026Q2,

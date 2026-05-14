@@ -27,6 +27,7 @@ from typing import Literal
 
 import numpy as np
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr
 
@@ -88,6 +89,26 @@ app = FastAPI(
     version="0.3.0",
     description="Speech-to-text endpoint for Synapse Voice (DSGVO-konform, EU-hosted).",
     lifespan=lifespan,
+)
+
+# 2026-05-14: CORS for browser fetch from meet.subunit.ai → /v1/meetings/*.
+# Until v0.9.0 we only need the meetings + diarize endpoints to be reachable
+# from a browser; the Sonar desktop client doesn't hit CORS. Keep the list
+# explicit so we don't accidentally widen the surface.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://meet.subunit.ai",
+        "https://subunit.ai",
+        "https://www.subunit.ai",
+        # Local dev:
+        "http://localhost:5173",
+        "http://localhost:5174",
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+    max_age=600,
 )
 
 
