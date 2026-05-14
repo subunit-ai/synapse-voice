@@ -1,7 +1,7 @@
 # Sonar — TODO / Roadmap
 
-Stand 2026-05-14, aktualisiert nach 7-Releases-Tag v0.5.7→v0.6.1.
-**Aktuelle Version: v0.6.1**
+Stand 2026-05-14 06:00, aktualisiert nach Diarize-Ship + QR-Konzept.
+**Aktuelle Version: v0.8.0**
 
 ## ✅ Komplett (v0.3.x → v0.6.1)
 - Local-Toggle, Local-Model-Picker, Cloud-Provider-UI
@@ -30,12 +30,26 @@ Stand 2026-05-14, aktualisiert nach 7-Releases-Tag v0.5.7→v0.6.1.
 - [ ] **Audio-Vis-Styles** umschaltbar: Wellen / Faeden / Klassisch (heute nur Verlet-Spheren)
 
 ### Killer-Feature (gross)
-- [ ] **Meetings-Tab** im Hauptfenster (TJ-Idee 2865)
-  - Liste aller Long-Form-Aufnahmen + Transcripts
-  - Deep-Dive: einzelnes Meeting öffnen → Transcript, Cleanup-Versionen (summary/action_items/minutes/decisions/raw), Speaker-Marker
-  - "Tasks rausziehen"-Button → POST zu api.subunit.ai/tasks via lokaler Bridge → erscheint in Subunit-App
-  - Search ueber alle Transcripts
-  - Verzahnt direkt mit Phase-1-Foundation
+- [x] **Meetings-Tab** im Hauptfenster (TJ-Idee 2865) — v0.7.0 LIVE
+- [x] **Speaker-Erkennung** (Codex Top 1) — v0.8.0 LIVE (server-side via /v1/diarize)
+- [ ] 🔥 **QR-Meeting-Check-In** (TJ-Idee 2026-05-14, msg 2937 + 2939 "DAS IST GENIAL")
+  - **v0.9.0-Kandidat — alleine marktfähig (TJ-O-Ton)**
+  - Host startet Meeting → QR-Code + 6-stelliger Zahlencode + meet.subunit.ai-URL erscheint
+  - Teilnehmer-Flows:
+    - Phone: QR scannen → Browser-PWA → Name → Join
+    - PC/ohne Cam: meet.subunit.ai aufrufen → 6-Stellen-Code tippen → Name → Join
+  - Web-PWA fordert Mic-Permission, streamt WebRTC zum Sonar-Server (Hamburg)
+  - Host-View: Live-Liste der eingecheckten Teilnehmer mit Avatar + Name + Timestamp
+  - Host kann manuell starten ODER warten auf alle vorher geplanten Teilnehmer
+  - Meeting im Voraus planbar (scheduled_at + expected_participants, pre-issued Codes)
+  - Pro Teilnehmer eigene Audio-Spur → Whisper parallel → Speaker = QR-Name (echte Namen)
+  - Pro Teilnehmer eigener Magic-Link mit Protokoll per Mail
+  - Host steuert was Teilnehmer X aus dem Master sieht
+  - **DSGVO-Killer**: Check-In = expliziter Aufnahme-Consent (Audit-Trail)
+  - Konkurrenz hat das nicht — Granola/Read.ai/Otter nehmen System-Audio aus 1 Mic auf
+  - Komponenten: Meeting-Session-API, meet.subunit.ai PWA (neue Surface), SFU (pion-go/mediasoup), Per-Stream-Recording, Post-Meeting-Pipeline, Per-Teilnehmer-Mail-Versand, Sonar-Desktop QR-Modal + Live-Liste + Planung
+  - Konzept-Doc: `~/.claude/projects/-home-subunit-subunit-unitone/memory/project_sonar-qr-meeting-checkin.md`
+  - Pricing-Implikation: Agency-Tier (€19-29/Monat), Cloud-Infra-Kosten je Meeting-Minute
 
 ### Marketing
 - [ ] **voice.subunit.ai** Marketing-Site
