@@ -886,6 +886,26 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.row_orb_overlay_v2)
 
         layout.addSpacing(6)
+        layout.addWidget(_section_title("Style"))
+        self.orb_style_combo = QComboBox()
+        self.orb_style_combo.addItem("Sphere — glass dot (default)", "sphere")
+        self.orb_style_combo.addItem("Sonar — animated logo (rings + bars)", "sonar")
+        self.orb_style_combo.addItem("Bars — graphic equalizer", "bars")
+        self.orb_style_combo.addItem("Wave — horizontal sine", "wave")
+        self.orb_style_combo.addItem("Classic — minimal dot", "classic")
+        idx = self.orb_style_combo.findData(
+            getattr(self.config, "orb_overlay_style", "sphere") or "sphere"
+        )
+        if idx >= 0:
+            self.orb_style_combo.setCurrentIndex(idx)
+        layout.addWidget(self.orb_style_combo)
+        layout.addWidget(_hint(
+            "Sonar reacts to your microphone — concentric rings ping outward "
+            "and the five center bars rise with your voice. Bars and Wave are "
+            "more graph-like; Classic is a single dim dot."
+        ))
+
+        layout.addSpacing(6)
         layout.addWidget(_section_title("Color theme"))
         self.orb_theme_combo = QComboBox()
         self.orb_theme_combo.addItem("Cyan (default)", "cyan")
@@ -1110,6 +1130,9 @@ class SettingsDialog(QDialog):
             else self.row_orb_overlay.is_on()
         )
         config.orb_color_theme = self.orb_theme_combo.currentData() or "cyan"
+        config.orb_overlay_style = (
+            self.orb_style_combo.currentData() if hasattr(self, "orb_style_combo") else "sphere"
+        ) or "sphere"
         config.orb_position = self.orb_position_combo.currentData() or "bottom-center"
         config.orb_idle_pulse = self.row_orb_pulse.is_on()
         config.recording_mode = self.recording_mode_combo.currentData() or "toggle"

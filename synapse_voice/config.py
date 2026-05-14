@@ -59,6 +59,14 @@ class Config:
     # Default = bottom-center (TJ-confirmed: "soll mittig platziert sein").
     orb_position: str = "bottom-center"
     orb_idle_pulse: bool = True
+    # v0.7.1: pick the overlay's renderer style. Each style reacts to the
+    # mic level differently — pick what feels right.
+    #   "sphere"  — current default: Verlet-physics glass spheres
+    #   "sonar"   — animated Sonar logo (pulsing rings + 5 audio-reactive bars)
+    #   "bars"    — vertical equalizer-style bars
+    #   "wave"    — horizontal sine waveform
+    #   "classic" — minimal cyan dot (Bubble-era throwback)
+    orb_overlay_style: str = "sphere"
 
     # v0.3.0: AI cleanup layer (default off — TJ-pref)
     cleanup_enabled: bool = False

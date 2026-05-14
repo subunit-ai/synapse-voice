@@ -233,14 +233,41 @@ class OrbOverlay(QWidget):
         elif self._state == "done":
             accent, accent_deep = GREEN, QColor(30, 90, 50)
 
-        # TJ-feedback v0.3.18: idle = nearly invisible (Voicely-tier
-        # minimalism). Only light up when hovered or actively
-        # recording/transcribing. Mix factor blends the dim/full
-        # palettes so the transition is animated by hover_opacity.
         is_active = self._state != "idle"
-        # 0 = fully dim idle, 1 = fully lit
+        # 0 = fully dim idle, 1 = fully lit (recording/hover)
         lit = 1.0 if is_active else self._satellite_opacity
 
+        # v0.7.1: dispatch to the configured renderer.
+        style = getattr(self.config, "orb_overlay_style", "sphere") or "sphere"
+        if style == "sonar":
+            self._paint_sonar(p, cx, cy, accent, accent_deep, lit, is_active)
+        elif style == "bars":
+            self._paint_bars(p, cx, cy, accent, accent_deep, lit, is_active)
+        elif style == "wave":
+            self._paint_wave(p, cx, cy, accent, accent_deep, lit, is_active)
+        elif style == "classic":
+            self._paint_classic(p, cx, cy, accent, accent_deep, lit, is_active)
+        else:
+            self._paint_sphere(p, cx, cy, accent, accent_deep, lit, is_active)
+
+        # Satellite dots (faded by hover-opacity so they dissolve in/out).
+        # Shared across all renderers so the picker UX stays consistent.
+        if self._satellite_opacity > 0.02:
+            self._draw_satellites(p, cx, cy, accent)
+
+    # ------------------------------------------------------------------
+    # Renderer: sphere (v0.4 default — Voicely-style glass dot)
+    # ------------------------------------------------------------------
+    def _paint_sphere(
+        self,
+        p: QPainter,
+        cx: int,
+        cy: int,
+        accent: QColor,
+        accent_deep: QColor,
+        lit: float,
+        is_active: bool,
+    ) -> None:
         # Outer halo — only when lit. Idle = no halo at all.
         if lit > 0.01:
             if self.config.orb_idle_pulse or is_active:
@@ -311,9 +338,185 @@ class OrbOverlay(QWidget):
                 max(2, int(self.DOT_RADIUS * 0.32)),
             )
 
-        # Satellite dots (faded by hover-opacity so they dissolve in/out)
-        if self._satellite_opacity > 0.02:
-            self._draw_satellites(p, cx, cy, accent)
+    # ------------------------------------------------------------------
+    # Renderer: sonar (animated Sonar logo — pulsing rings + audio bars)
+    # ------------------------------------------------------------------
+    def _paint_sonar(
+        self,
+        p: QPainter,
+        cx: int,
+        cy: int,
+        accent: QColor,
+        accent_deep: QColor,
+        lit: float,
+        is_active: bool,
+    ) -> None:
+        # Layout is keyed off DOT_RADIUS so it scales with the rest of the orb.
+        # Outer ring radius == ~2.2x DOT_RADIUS, inner ~1.6x, bars span ~1.1x.
+        outer_r = int(self.DOT_RADIUS * 2.2)
+        inner_r = int(self.DOT_RADIUS * 1.6)
+        bar_span = int(self.DOT_RADIUS * 1.1)
+        bar_w = max(2, int(self.DOT_RADIUS * 0.18))
+        bar_gap = max(1, int(self.DOT_RADIUS * 0.12))
+
+        # Animated phases
+        breath = 0.5 + 0.5 * math.sin(self._pulse_phase * 0.9)
+        level = self._level_smooth
+
+        # 1) Outer ring — faint always, gets brighter when lit.
+        outer_alpha = int((40 + 70 * lit) * (0.6 + 0.4 * breath))
+        outer_col = QColor(accent)
+        outer_col.setAlpha(outer_alpha)
+        p.setPen(QPen(outer_col, 1.6))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(cx - outer_r, cy - outer_r, outer_r * 2, outer_r * 2)
+
+        # 2) Inner ring — slightly brighter.
+        inner_alpha = int((90 + 90 * lit) * (0.6 + 0.4 * breath))
+        inner_col = QColor(accent)
+        inner_col.setAlpha(inner_alpha)
+        p.setPen(QPen(inner_col, 1.8))
+        p.drawEllipse(cx - inner_r, cy - inner_r, inner_r * 2, inner_r * 2)
+
+        # 3) Sonar ping — when active, expand a ring outward beyond the outer
+        # ring, fading as it travels. Period synced to pulse_phase.
+        if is_active or lit > 0.5:
+            ping_phase = (self._pulse_phase * 0.55) % 1.0
+            ping_r = inner_r + (outer_r - inner_r + self.PADDING - 6) * ping_phase
+            ping_alpha = int(160 * (1.0 - ping_phase) * lit)
+            if ping_alpha > 0:
+                ping_col = QColor(accent)
+                ping_col.setAlpha(ping_alpha)
+                p.setPen(QPen(ping_col, 1.4))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawEllipse(int(cx - ping_r), int(cy - ping_r), int(ping_r * 2), int(ping_r * 2))
+
+        # 4) Five vertical bars — heights from the SVG: 8, 16, 32, 24, 12
+        # (relative units). They modulate with audio level (recording) or a
+        # gentle breathing motion (idle).
+        bar_heights_base = [8.0, 16.0, 32.0, 24.0, 12.0]
+        n = len(bar_heights_base)
+        total_w = n * bar_w + (n - 1) * bar_gap
+        start_x = cx - total_w // 2
+
+        # Scale: bars in the SVG span 32 units max; we map that to bar_span px.
+        unit_px = bar_span / 32.0
+
+        # Modulation: idle = subtle breathing, active = audio-reactive.
+        if is_active:
+            scale = 0.45 + 1.55 * level + 0.15 * breath
+        else:
+            scale = 0.42 + 0.18 * breath
+        scale *= 0.7 + 0.3 * lit
+
+        # Per-bar phase offset so they don't all wiggle in unison when idle.
+        for i, base in enumerate(bar_heights_base):
+            phase_off = math.sin(self._pulse_phase * 1.4 + i * 0.9) * 0.10
+            h = max(2, int(base * unit_px * (scale + phase_off)))
+            x = start_x + i * (bar_w + bar_gap)
+            y = cy - h // 2
+            col = QColor(accent if is_active or lit > 0.5 else _DIM_DOT)
+            col_alpha_base = 200 if is_active else 90 + int(120 * lit)
+            col.setAlpha(min(255, col_alpha_base))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(col)
+            p.drawRoundedRect(x, y, bar_w, h, bar_w / 2, bar_w / 2)
+
+    # ------------------------------------------------------------------
+    # Renderer: bars (graphic-EQ-style vertical bars)
+    # ------------------------------------------------------------------
+    def _paint_bars(
+        self,
+        p: QPainter,
+        cx: int,
+        cy: int,
+        accent: QColor,
+        accent_deep: QColor,
+        lit: float,
+        is_active: bool,
+    ) -> None:
+        n = 9
+        bar_w = max(2, int(self.DOT_RADIUS * 0.30))
+        bar_gap = max(1, int(self.DOT_RADIUS * 0.18))
+        total_w = n * bar_w + (n - 1) * bar_gap
+        start_x = cx - total_w // 2
+        max_h = int(self.DOT_RADIUS * 2.4)
+        level = self._level_smooth
+
+        for i in range(n):
+            # Center bars taller than edges, all audio-reactive.
+            falloff = 1.0 - abs(i - n // 2) / (n // 2 + 1)
+            phase = math.sin(self._pulse_phase * 1.6 + i * 0.6)
+            if is_active:
+                amp = 0.30 + level * 1.5 + 0.10 * phase
+            else:
+                amp = 0.18 + 0.10 * (0.5 + 0.5 * phase)
+            h = max(2, int(max_h * falloff * amp * (0.6 + 0.4 * lit)))
+            x = start_x + i * (bar_w + bar_gap)
+            y = cy - h // 2
+            col = QColor(accent if is_active or lit > 0.5 else _DIM_DOT)
+            col.setAlpha(min(255, 90 + int(160 * lit)))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(col)
+            p.drawRoundedRect(x, y, bar_w, h, bar_w / 2, bar_w / 2)
+
+    # ------------------------------------------------------------------
+    # Renderer: wave (horizontal sine waveform)
+    # ------------------------------------------------------------------
+    def _paint_wave(
+        self,
+        p: QPainter,
+        cx: int,
+        cy: int,
+        accent: QColor,
+        accent_deep: QColor,
+        lit: float,
+        is_active: bool,
+    ) -> None:
+        from PyQt6.QtGui import QPainterPath
+        span = int(self.DOT_RADIUS * 2.6)
+        amp_base = self.DOT_RADIUS * 0.8
+        level = self._level_smooth
+        amp = amp_base * ((0.35 + level * 1.6) if is_active else (0.18 + 0.10 * math.sin(self._pulse_phase * 1.2)))
+        amp *= 0.6 + 0.4 * lit
+
+        path = QPainterPath()
+        steps = 64
+        for i in range(steps + 1):
+            t = i / steps
+            x = cx - span // 2 + int(t * span)
+            phase = self._pulse_phase * 1.8 + t * 6.28 * 2
+            y = cy + int(amp * math.sin(phase))
+            if i == 0:
+                path.moveTo(x, y)
+            else:
+                path.lineTo(x, y)
+
+        col = QColor(accent if is_active or lit > 0.5 else _DIM_DOT)
+        col.setAlpha(min(255, 110 + int(140 * lit)))
+        p.setPen(QPen(col, 2.0))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
+
+    # ------------------------------------------------------------------
+    # Renderer: classic (minimal cyan dot — Bubble-era throwback)
+    # ------------------------------------------------------------------
+    def _paint_classic(
+        self,
+        p: QPainter,
+        cx: int,
+        cy: int,
+        accent: QColor,
+        accent_deep: QColor,
+        lit: float,
+        is_active: bool,
+    ) -> None:
+        r = max(4, int(self.DOT_RADIUS * (0.95 + 0.25 * self._level_smooth)))
+        col = QColor(accent if is_active or lit > 0.5 else _DIM_DOT)
+        col.setAlpha(min(255, 110 + int(140 * lit)))
+        p.setPen(QPen(GLASS_RIM, 1.0))
+        p.setBrush(col)
+        p.drawEllipse(cx - r, cy - r, r * 2, r * 2)
 
     def _draw_satellites(
         self, p: QPainter, cx: int, cy: int, accent: QColor
