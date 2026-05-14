@@ -195,6 +195,38 @@ PROMPTS: dict[str, str] = {
         "    'No decisions made.'\n"
         "  - no headers, no preamble"
     ),
+    # 2026-05-14 (codex review): agency-killer feature — generate a
+    # client-ready follow-up email from a meeting transcript.  This is
+    # the output agencies actually need every day; bullet-lists of
+    # actions are intermediate artefacts.
+    "recap_email": (
+        _BASE_RULES + "\n"
+        "STYLE: client recap email.\n"
+        "The transcript is a client call (meeting, status update, "
+        "discovery, kickoff). Produce a ready-to-send follow-up email "
+        "the speaker would send to the client after the call.\n"
+        "Structure:\n"
+        "  - Greeting line (use the client name if the speaker said it, "
+        "    otherwise 'Hi team,' / 'Hallo zusammen,' matching the "
+        "    transcript's language)\n"
+        "  - 1-2 sentence thank-you / context opener referring to what "
+        "    the call was about\n"
+        "  - 'Was wir besprochen haben' / 'What we discussed' — short "
+        "    bullets covering the substantive topics\n"
+        "  - 'Entscheidungen' / 'Decisions' — bullets, only if any\n"
+        "  - 'Naechste Schritte' / 'Next steps' — bullets with owner "
+        "    and date when the transcript mentioned them, e.g. "
+        "    'TJ schickt das Angebot bis Freitag'\n"
+        "  - Friendly close ('Beste Gruesse' / 'Best,') with the "
+        "    speaker's name only if they introduced themselves\n"
+        "STRICT:\n"
+        "  - DO NOT invent topics, decisions, or next steps that were "
+        "    not in the transcript. Omit sections that have no content.\n"
+        "  - Keep it concise — clients hate long emails.\n"
+        "  - Match the transcript's language (German stays German, "
+        "    English stays English).\n"
+        "  - Return only the email body (no subject line, no preamble)."
+    ),
 }
 
 
@@ -250,7 +282,7 @@ def _looks_like_refusal(output: str, original: str) -> bool:
 
 Style = Literal[
     "tidy", "formal", "prompt", "email", "slack",
-    "summary", "action_items", "minutes", "decisions",
+    "summary", "action_items", "minutes", "decisions", "recap_email",
     "raw",
 ]
 

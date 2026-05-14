@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from pathlib import Path
 from typing import Callable
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
@@ -16,6 +18,7 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -46,6 +49,7 @@ STYLE_LABELS: list[tuple[str, str]] = [
     ("action_items", "Action items"),
     ("minutes", "Minutes"),
     ("decisions", "Decisions"),
+    ("recap_email", "Recap email"),
     ("tidy", "Tidy"),
 ]
 
@@ -101,6 +105,14 @@ QCheckBox::indicator {
     background: #0c1828;
 }
 QCheckBox::indicator:checked { background: #40d6ff; border-color: #40d6ff; }
+QLabel#owner {
+    color: #ffb86b; background: #2a1f10; padding: 1px 7px;
+    border: 1px solid #4a3618; border-radius: 999px; font-size: 10px;
+}
+QLabel#due {
+    color: #9be29b; background: #102a16; padding: 1px 7px;
+    border: 1px solid #1f4528; border-radius: 999px; font-size: 10px;
+}
 """
 
 
@@ -140,12 +152,16 @@ class CleanupWorker(QThread):
 # Tasks/Decisions extraction dialog
 # ----------------------------------------------------------------------
 class ExtractDialog(QDialog):
-    """Confirm which extracted items to push into the Bridge."""
+    """Confirm which extracted items to push into the Bridge.
+
+    ``items`` are already parsed into ``{text, owner, due}`` dicts so the
+    dialog can render owner / due chips next to each row.
+    """
 
     def __init__(
         self,
         kind: str,  # "task" or "decision"
-        items: list[str],
+        items: list[dict],
         bridge: BridgeClient,
         meeting: Meeting,
         on_done: Callable[[int], None],
@@ -154,12 +170,12 @@ class ExtractDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"Extracted {kind.title()}s — confirm")
         self.setStyleSheet(DARK_QSS)
-        self.resize(520, 480)
+        self.resize(560, 520)
         self._kind = kind
         self._bridge = bridge
         self._meeting = meeting
         self._on_done = on_done
-        self._checks: list[tuple[QCheckBox, str]] = []
+        self._checks: list[tuple[QCheckBox, dict]] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
@@ -167,7 +183,12 @@ class ExtractDialog(QDialog):
 
         head = QLabel(f"{len(items)} {kind}s detected — pick which to push to your Subunit Inbox.")
         head.setObjectName("h1")
+        head.setWordWrap(True)
         layout.addWidget(head)
+
+        hint = QLabel("Owner und Due-Date werden mit übernommen.")
+        hint.setObjectName("dim")
+        layout.addWidget(hint)
 
         from PyQt6.QtWidgets import QScrollArea
         scroll = QScrollArea()
@@ -175,13 +196,32 @@ class ExtractDialog(QDialog):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         body = QWidget()
         body_l = QVBoxLayout(body)
-        body_l.setSpacing(8)
+        body_l.setSpacing(10)
         body_l.setContentsMargins(2, 2, 2, 2)
         for item in items:
-            cb = QCheckBox(item)
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            cb = QCheckBox()
             cb.setChecked(True)
-            cb.setWordWrap(True)
-            body_l.addWidget(cb)
+            row.addWidget(cb, 0, Qt.AlignmentFlag.AlignTop)
+            text_lbl = QLabel(item.get("text", "") or "(empty)")
+            text_lbl.setWordWrap(True)
+            text_lbl.setStyleSheet("color:#e6f2fb;")
+            text_lbl.setMinimumWidth(280)
+            row.addWidget(text_lbl, 1)
+            if item.get("owner"):
+                owner_chip = QLabel(f"@{item['owner']}")
+                owner_chip.setObjectName("owner")
+                owner_chip.setFixedHeight(20)
+                row.addWidget(owner_chip, 0, Qt.AlignmentFlag.AlignTop)
+            if item.get("due"):
+                due_chip = QLabel(item["due"])
+                due_chip.setObjectName("due")
+                due_chip.setFixedHeight(20)
+                row.addWidget(due_chip, 0, Qt.AlignmentFlag.AlignTop)
+            wrap = QWidget()
+            wrap.setLayout(row)
+            body_l.addWidget(wrap)
             self._checks.append((cb, item))
         body_l.addStretch()
         scroll.setWidget(body)
@@ -199,41 +239,51 @@ class ExtractDialog(QDialog):
         layout.addLayout(btns)
 
     def _on_push_clicked(self) -> None:
-        selected = [text for cb, text in self._checks if cb.isChecked()]
+        selected = [item for cb, item in self._checks if cb.isChecked()]
         if not selected:
             self.reject()
             return
         pushed = 0
         errors: list[str] = []
         for item in selected:
+            text = item.get("text", "")
+            owner = item.get("owner")
+            due = item.get("due")
             try:
                 if self._kind == "task":
                     self._bridge.create_task(
-                        item,
+                        text,
                         metadata={
                             "source_meeting_id": self._meeting.id,
                             "meeting_title": self._meeting.title,
+                            "owner": owner,
+                            "due": due,
                         },
                     )
                 else:
                     self._bridge.create_decision(
-                        item,
+                        text,
                         body=f"Extracted from meeting {self._meeting.title} ({self._meeting.created_at_local_str})",
                         source="sonar",
                         metadata={
                             "source_meeting_id": self._meeting.id,
                             "meeting_title": self._meeting.title,
+                            "owner": owner,
+                            "due": due,
                         },
                     )
                 pushed += 1
             except BridgeError as e:
                 errors.append(str(e))
         if errors:
-            QMessageBox.warning(
-                self,
-                "Bridge",
-                f"Pushed {pushed}/{len(selected)}. Errors:\n" + "\n".join(errors[:3]),
+            # Codex polish #5: actionable failure microcopy instead of
+            # generic "errors" dump.
+            msg = (
+                f"{pushed} of {len(selected)} {self._kind}s reached the Bridge.\n\n"
+                "The rest are still on disk — open the Meetings tab to retry.\n\n"
+                "First error:\n" + errors[0]
             )
+            QMessageBox.warning(self, "Bridge offline?", msg)
         self._on_done(pushed)
         self.accept()
 
@@ -345,12 +395,19 @@ class MeetingsDialog(QDialog):
         self.btn_tasks.clicked.connect(lambda: self._extract_to_bridge(kind="task"))
         self.btn_decisions = QPushButton("Extract Decisions → Bridge")
         self.btn_decisions.clicked.connect(lambda: self._extract_to_bridge(kind="decision"))
+        self.btn_recap = QPushButton("Recap Email…")
+        self.btn_recap.setToolTip("Generate a ready-to-send client follow-up email.")
+        self.btn_recap.clicked.connect(self._on_recap_clicked)
+        self.btn_export = QPushButton("Export…")
+        self.btn_export.setToolTip("Save the currently shown view as Markdown / TXT / JSON.")
+        self.btn_export.clicked.connect(self._on_export_clicked)
         self.btn_copy = QPushButton("Copy")
         self.btn_copy.clicked.connect(self._on_copy_clicked)
         self.btn_delete = QPushButton("Delete")
         self.btn_delete.setObjectName("danger")
         self.btn_delete.clicked.connect(self._on_delete_clicked)
-        for b in (self.btn_tasks, self.btn_decisions, self.btn_copy, self.btn_delete):
+        for b in (self.btn_tasks, self.btn_decisions, self.btn_recap,
+                  self.btn_export, self.btn_copy, self.btn_delete):
             b.setEnabled(False)
             actions_row.addWidget(b)
         actions_row.addStretch()
@@ -416,7 +473,8 @@ class MeetingsDialog(QDialog):
         self.chip_lang.setText((m.language or "auto").upper())
         for chip in (self.chip_date, self.chip_duration, self.chip_source, self.chip_lang):
             chip.show()
-        for b in (self.btn_tasks, self.btn_decisions, self.btn_copy, self.btn_delete):
+        for b in (self.btn_tasks, self.btn_decisions, self.btn_recap,
+                  self.btn_export, self.btn_copy, self.btn_delete):
             b.setEnabled(True)
         # Pick the currently-shown style — default to "raw" so the user always
         # sees the actual transcript first.
@@ -487,6 +545,86 @@ class MeetingsDialog(QDialog):
         if text:
             QGuiApplication.clipboard().setText(text)
 
+    def _on_recap_clicked(self) -> None:
+        """Switch to the recap_email style and trigger generation."""
+        idx = self.style_picker.findData("recap_email")
+        if idx < 0:
+            return
+        self.style_picker.setCurrentIndex(idx)
+        # _on_style_changed fires from the signal which calls _render_body.
+        # If the recap is already cached this is instant; otherwise the
+        # CleanupWorker spins up and the user sees the "⏳ Generating…" hint.
+
+    def _on_export_clicked(self) -> None:
+        if not self._current:
+            return
+        body = self.body.toPlainText()
+        style_label = self.style_picker.currentText() or self._current_style
+        safe_title = re.sub(r"[^\w\-]+", "_", self._current.title)[:48].strip("_") or "meeting"
+        default_name = f"{safe_title}_{style_label.replace(' ', '_').lower()}"
+        path_str, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export meeting",
+            default_name,
+            "Markdown (*.md);;Plain text (*.txt);;JSON (*.json)",
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        suffix = path.suffix.lower()
+        if not suffix:
+            # Infer from selected filter when the user didn't type an extension.
+            if "Markdown" in selected_filter:
+                suffix = ".md"
+            elif "JSON" in selected_filter:
+                suffix = ".json"
+            else:
+                suffix = ".txt"
+            path = path.with_suffix(suffix)
+        try:
+            if suffix == ".json":
+                payload = self._current.to_dict() if hasattr(self._current, "to_dict") else {
+                    "id": self._current.id,
+                    "title": self._current.title,
+                    "created_at": self._current.created_at_iso,
+                    "duration_seconds": self._current.duration_seconds,
+                    "language": self._current.language,
+                    "source": self._current.source,
+                    "window_title": self._current.window_title,
+                    "transcript_raw": self._current.transcript_raw,
+                    "cleanup_versions": self._current.cleanup_versions,
+                    "tags": self._current.tags,
+                }
+                payload["exported_style"] = self._current_style
+                payload["exported_body"] = body
+                path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            elif suffix == ".md":
+                md = (
+                    f"# {self._current.title}\n\n"
+                    f"- Date: {self._current.created_at_local_str}\n"
+                    f"- Duration: {self._current.duration_str}\n"
+                    f"- Source: {self._current.source or 'Microphone'}\n"
+                    f"- Language: {(self._current.language or 'auto').upper()}\n"
+                    f"- View: **{style_label}**\n\n"
+                    "---\n\n"
+                    f"{body}\n"
+                )
+                path.write_text(md, encoding="utf-8")
+            else:
+                txt = (
+                    f"{self._current.title}\n"
+                    f"{self._current.created_at_local_str} · {self._current.duration_str} · "
+                    f"{self._current.source or 'Microphone'}\n"
+                    f"View: {style_label}\n"
+                    + "-" * 60 + "\n"
+                    f"{body}\n"
+                )
+                path.write_text(txt, encoding="utf-8")
+        except OSError as e:
+            QMessageBox.warning(self, "Export failed", f"Could not write {path}:\n{e}")
+            return
+        QMessageBox.information(self, "Exported", f"Saved to {path}")
+
     def _on_delete_clicked(self) -> None:
         if not self._current:
             return
@@ -504,7 +642,8 @@ class MeetingsDialog(QDialog):
         for chip in (self.chip_date, self.chip_duration, self.chip_source, self.chip_lang):
             chip.hide()
         self.body.clear()
-        for b in (self.btn_tasks, self.btn_decisions, self.btn_copy, self.btn_delete):
+        for b in (self.btn_tasks, self.btn_decisions, self.btn_recap,
+                  self.btn_export, self.btn_copy, self.btn_delete):
             b.setEnabled(False)
         self._refresh_list()
 
@@ -555,7 +694,7 @@ class MeetingsDialog(QDialog):
             self.style_picker.blockSignals(False)
             self._current_style = style
             self.body.setPlainText(text)
-        items = _parse_list_items(text)
+        items = _parse_structured_items(text)
         if not items:
             QMessageBox.information(
                 self,
@@ -603,15 +742,15 @@ class MeetingsDialog(QDialog):
 # Helpers
 # ----------------------------------------------------------------------
 def _parse_list_items(text: str) -> list[str]:
-    """Extract a list of items from an AI-cleanup result.
+    """Extract plain list items from an AI-cleanup result.
 
-    Accepts JSON arrays of strings, Markdown bullet lists (``- foo``, ``* foo``,
-    ``1. foo``), and falls back to non-empty lines.
+    Accepts JSON arrays of strings, Markdown bullet lists, and falls back
+    to non-empty lines. Kept for back-compat / Copy-style use; structured
+    extraction goes through :func:`_parse_structured_items`.
     """
     if not text:
         return []
     stripped = text.strip()
-    # JSON array?
     if stripped.startswith("[") and stripped.endswith("]"):
         try:
             data = json.loads(stripped)
@@ -622,22 +761,15 @@ def _parse_list_items(text: str) -> list[str]:
     items: list[str] = []
     for line in stripped.splitlines():
         s = line.strip()
-        if not s:
+        if not s or s.startswith("#"):
             continue
-        # Skip section headings
-        if s.startswith("#"):
-            continue
-        # Bullet markers
         for marker in ("- ", "* ", "• "):
             if s.startswith(marker):
                 s = s[len(marker):].strip()
                 break
-        # Numbered list "1. ", "12) "
-        import re
         s = re.sub(r"^\d+[.)]\s+", "", s)
         if s:
             items.append(s)
-    # Deduplicate while preserving order
     seen: set[str] = set()
     result: list[str] = []
     for it in items:
@@ -647,3 +779,96 @@ def _parse_list_items(text: str) -> list[str]:
         seen.add(key)
         result.append(it)
     return result
+
+
+# Matches the cleanup-server output format from cleanup.py / action_items:
+#   "- [@owner] description (due: date)"
+# Owner and due are optional. Due-suffix is stripped before owner extraction.
+_OWNER_BRACKET_RE = re.compile(r"^\[@([^\]]+)\]\s*(.*)")
+_DUE_SUFFIX_RE = re.compile(r"\s*\(due:\s*([^)]+)\)\s*$", flags=re.IGNORECASE)
+# decisions style format: "TJ: <decision>" or "Erik: <decision>"
+_SPEAKER_PREFIX_RE = re.compile(r"^([A-Z][\w\-]{1,18}):\s+(.*)")
+
+
+def _parse_structured_items(text: str) -> list[dict]:
+    """Parse action_items / decisions output into structured records.
+
+    Returns a list of ``{"text": str, "owner": str|None, "due": str|None}``
+    dicts. Accepts:
+      - JSON arrays of strings (each treated as text-only)
+      - JSON arrays of objects with text/owner/due keys
+      - Markdown bullets in the format produced by the server prompts
+    """
+    if not text:
+        return []
+    stripped = text.strip()
+    # JSON array first.
+    if stripped.startswith("[") and stripped.endswith("]"):
+        try:
+            data = json.loads(stripped)
+            if isinstance(data, list):
+                results: list[dict] = []
+                for x in data:
+                    if isinstance(x, dict):
+                        body = str(x.get("task") or x.get("text") or x.get("description") or "").strip()
+                        if not body:
+                            continue
+                        results.append({
+                            "text": body,
+                            "owner": (x.get("owner") or x.get("assignee") or None) or None,
+                            "due": (x.get("due") or x.get("due_date") or x.get("deadline") or None) or None,
+                        })
+                    else:
+                        s = str(x).strip()
+                        if s:
+                            results.append({"text": s, "owner": None, "due": None})
+                return _dedup_items(results)
+        except Exception:
+            pass
+
+    items: list[dict] = []
+    for line in stripped.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        for marker in ("- ", "* ", "• "):
+            if s.startswith(marker):
+                s = s[len(marker):].strip()
+                break
+        s = re.sub(r"^\d+[.)]\s+", "", s)
+        if not s:
+            continue
+        owner: str | None = None
+        due: str | None = None
+        # Strip "(due: ...)" suffix first so owner-bracket logic stays simple.
+        m_due = _DUE_SUFFIX_RE.search(s)
+        if m_due:
+            due = m_due.group(1).strip()
+            s = _DUE_SUFFIX_RE.sub("", s).strip()
+        # "[@owner] body" form.
+        m_owner = _OWNER_BRACKET_RE.match(s)
+        if m_owner:
+            owner_raw = m_owner.group(1).strip()
+            owner = None if owner_raw.lower() == "me" else owner_raw
+            s = m_owner.group(2).strip()
+        # "Speaker: body" form (decisions style).
+        if not owner:
+            m_speaker = _SPEAKER_PREFIX_RE.match(s)
+            if m_speaker:
+                owner = m_speaker.group(1).strip()
+                s = m_speaker.group(2).strip()
+        if s:
+            items.append({"text": s, "owner": owner, "due": due})
+    return _dedup_items(items)
+
+
+def _dedup_items(items: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    out: list[dict] = []
+    for it in items:
+        key = (it.get("text") or "").lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(it)
+    return out

@@ -33,7 +33,7 @@ from ..config import Config
 from ..logger import log_file_path
 from ..transcriber import ALL_MODES, CLOUD_MODES, mode_label
 from ..transcriber.cloud import PROVIDER_PRESETS
-from .hotkey_capture import HotkeyCaptureButton
+from .hotkey_capture import HotkeyCaptureButton, detect_hotkey_conflict
 from .widgets import AnimatedToggle, BrandLogo
 
 CYAN = "#40d6ff"
@@ -259,6 +259,15 @@ class SettingsDialog(QDialog):
         self.hotkey_btn = HotkeyCaptureButton(self.config.hotkey)
         layout.addWidget(self.hotkey_btn)
         layout.addWidget(_hint("Click and press the key combo you want to use to start/stop recording."))
+        self.hotkey_warning = QLabel("")
+        self.hotkey_warning.setWordWrap(True)
+        self.hotkey_warning.setStyleSheet(
+            f"color: #ffb86b; font-size: 12px; padding: 4px 0;"
+        )
+        self.hotkey_warning.hide()
+        layout.addWidget(self.hotkey_warning)
+        self.hotkey_btn.captured.connect(self._refresh_hotkey_warning)
+        self._refresh_hotkey_warning()
 
         layout.addSpacing(6)
         layout.addWidget(_section_title("Language"))
@@ -480,6 +489,18 @@ class SettingsDialog(QDialog):
 
         layout.addStretch(1)
         return page
+
+    def _refresh_hotkey_warning(self, *_args) -> None:
+        combo = self.hotkey_btn.value()
+        reason = detect_hotkey_conflict(combo)
+        if reason:
+            self.hotkey_warning.setText(
+                f"⚠ Likely conflict: {reason}. Pick a less-common combo or "
+                "Sonar may not fire."
+            )
+            self.hotkey_warning.show()
+        else:
+            self.hotkey_warning.hide()
 
     # ── Tab 2: Transcription ───────────────────────────────────────────────
 
@@ -1009,9 +1030,121 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self.row_synapse_save)
 
+        # 2026-05-14 (codex review #5): make DSGVO concrete and visible in
+        # the product instead of leaving it as a brand claim. EU buyers
+        # ask for these facts every time — surface them so they don't
+        # have to email Erik to find out.
+        layout.addSpacing(12)
+        layout.addWidget(_section_title("Datenschutz / DSGVO"))
+
+        privacy_box = QFrame()
+        privacy_box.setStyleSheet(
+            f"QFrame {{ background: {NIGHT_2}; border: 1px solid {NIGHT_BORDER}; "
+            f"border-radius: 8px; padding: 12px; }}"
+        )
+        pl = QVBoxLayout(privacy_box)
+        pl.setSpacing(6)
+        pl.setContentsMargins(12, 10, 12, 12)
+
+        local_only = (self.config.mode or "").lower() == "local"
+        mode_line = (
+            "Verarbeitung: <b>nur lokal</b> auf diesem Gerät (keine Cloud-Übertragung)."
+            if local_only
+            else "Verarbeitung: <b>Cloud-Modus</b> – Audio + Transkripte werden zur "
+                 "Subunit-API in Hamburg gesendet."
+        )
+        cloud_url = (self.config.subunit_endpoint or "").strip() or "https://transcribe.subunit.ai"
+        rows = [
+            f"<b>Speicherort der Server:</b> Hamburg, Deutschland (EU-only)",
+            mode_line,
+            f"<b>Aufbewahrung:</b> Lokal unter <code>~/.config/synapse-voice</code> "
+            f"– du löschst jederzeit per <i>Delete</i> in <i>Meetings</i> / <i>History</i>.",
+            "<b>Audio-Dateien:</b> nach der Transkription verworfen (nichts wird gespeichert).",
+            "<b>Cleanup-Modell:</b> Claude Haiku via OpenRouter (EU-Region), Temperature 0, "
+            "keine Trainingsnutzung deiner Daten.",
+            f"<b>Cloud-Endpoint:</b> <code>{cloud_url}</code>",
+        ]
+        for html in rows:
+            lbl = QLabel(html)
+            lbl.setWordWrap(True)
+            lbl.setTextFormat(Qt.TextFormat.RichText)
+            lbl.setStyleSheet(f"color: {WHITE}; font-size: 12px;")
+            pl.addWidget(lbl)
+
+        dsgvo_btn_row = QHBoxLayout()
+        dsgvo_btn_row.setSpacing(8)
+        self.btn_open_config_dir = QPushButton("Datenordner öffnen…")
+        self.btn_open_config_dir.clicked.connect(self._on_open_config_dir)
+        self.btn_avv_download = QPushButton("AVV / DPA anfordern")
+        self.btn_avv_download.clicked.connect(self._on_request_avv)
+        self.btn_delete_all_meetings = QPushButton("Alle Meetings löschen")
+        self.btn_delete_all_meetings.setObjectName("danger")
+        self.btn_delete_all_meetings.clicked.connect(self._on_delete_all_meetings)
+        dsgvo_btn_row.addWidget(self.btn_open_config_dir)
+        dsgvo_btn_row.addWidget(self.btn_avv_download)
+        dsgvo_btn_row.addStretch(1)
+        dsgvo_btn_row.addWidget(self.btn_delete_all_meetings)
+        pl.addLayout(dsgvo_btn_row)
+
+        layout.addWidget(privacy_box)
+
         layout.addStretch(1)
         self._refresh_account_status()
         return page
+
+    def _on_open_config_dir(self) -> None:
+        """Reveal the user's Sonar config directory in the OS file explorer."""
+        from pathlib import Path
+        config_dir = Path.home() / ".config" / "synapse-voice"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(config_dir)))
+
+    def _on_request_avv(self) -> None:
+        from PyQt6.QtWidgets import QMessageBox
+        # AVV/DPA workflow — we don't have a self-serve PDF yet, so the
+        # button mailto-launches a request that the agency answers within
+        # 1 working day. Better than buyers having to figure out who to
+        # contact.
+        email = self.config.account_email or ""
+        subject = "AVV / DPA für Sonar"
+        body = (
+            "Hallo Subunit-Team,%0D%0A%0D%0A"
+            "ich möchte einen AVV / DPA für die Nutzung von Sonar.%0D%0A%0D%0A"
+            f"Account: {email}%0D%0A"
+            "Firma: %0D%0A"
+            "Anschrift: %0D%0A%0D%0A"
+            "Vielen Dank!"
+        )
+        url = f"mailto:hello@subunit.ai?subject={subject}&body={body}"
+        QDesktopServices.openUrl(QUrl(url))
+        QMessageBox.information(
+            self,
+            "AVV / DPA",
+            "Eine Mail an hello@subunit.ai ist vorbereitet. "
+            "Wir antworten innerhalb eines Werktags mit dem unterzeichneten AVV.",
+        )
+
+    def _on_delete_all_meetings(self) -> None:
+        from PyQt6.QtWidgets import QMessageBox
+        confirm = QMessageBox.question(
+            self,
+            "Alle Meetings löschen?",
+            "Das löscht ALLE auf diesem Gerät gespeicherten Meetings unwiderruflich.\n\n"
+            "Cloud-/Bridge-Kopien sind davon nicht betroffen.\n\nWeiter?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            from ..meetings import MeetingsStore
+            store = MeetingsStore()
+            count = 0
+            for m in store.list_all():
+                store.delete(m.id)
+                count += 1
+            QMessageBox.information(self, "Gelöscht", f"{count} Meetings entfernt.")
+        except Exception as e:
+            QMessageBox.warning(self, "Fehler", f"Löschen fehlgeschlagen:\n{e}")
 
     def _refresh_account_status(self) -> None:
         if self.config.account_email and self.config.subunit_api_key:

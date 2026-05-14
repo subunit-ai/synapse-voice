@@ -215,7 +215,7 @@ class CleanupRequest(BaseModel):
     text: str
     style: Literal[
         "tidy", "formal", "prompt", "email", "slack",
-        "summary", "action_items", "minutes", "decisions",
+        "summary", "action_items", "minutes", "decisions", "recap_email",
         "raw",
     ] = "tidy"
 
