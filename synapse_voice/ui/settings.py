@@ -939,9 +939,13 @@ class SettingsDialog(QDialog):
         layout.addSpacing(6)
         layout.addWidget(_section_title("Style"))
         self.orb_style_combo = QComboBox()
-        self.orb_style_combo.addItem("Sphere — glass dot (default)", "sphere")
-        self.orb_style_combo.addItem("Sonar — animated logo (rings + bars)", "sonar")
-        self.orb_style_combo.addItem("Bars — graphic equalizer", "bars")
+        # v0.9.6: 3 new styles up top (TJ-pick list), legacy below.
+        self.orb_style_combo.addItem("Sonar Ping — mic-reactive expanding rings ⭐", "ping")
+        self.orb_style_combo.addItem("Status Pill — compact label + state dot", "pill")
+        self.orb_style_combo.addItem("Constellation — orbiting nodes (rotating)", "constellation")
+        self.orb_style_combo.addItem("Bars — vertical audio equalizer", "bars")
+        self.orb_style_combo.addItem("Sphere — glass dot (legacy default)", "sphere")
+        self.orb_style_combo.addItem("Sonar — animated logo (rings + bars, legacy)", "sonar")
         self.orb_style_combo.addItem("Wave — horizontal sine", "wave")
         self.orb_style_combo.addItem("Classic — minimal dot", "classic")
         idx = self.orb_style_combo.findData(

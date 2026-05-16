@@ -237,7 +237,7 @@ class OrbOverlay(QWidget):
         # 0 = fully dim idle, 1 = fully lit (recording/hover)
         lit = 1.0 if is_active else self._satellite_opacity
 
-        # v0.7.1: dispatch to the configured renderer.
+        # v0.7.1 / v0.9.6: dispatch to the configured renderer.
         style = getattr(self.config, "orb_overlay_style", "sphere") or "sphere"
         if style == "sonar":
             self._paint_sonar(p, cx, cy, accent, accent_deep, lit, is_active)
@@ -247,6 +247,12 @@ class OrbOverlay(QWidget):
             self._paint_wave(p, cx, cy, accent, accent_deep, lit, is_active)
         elif style == "classic":
             self._paint_classic(p, cx, cy, accent, accent_deep, lit, is_active)
+        elif style == "ping":
+            self._paint_ping(p, cx, cy, accent, accent_deep, lit, is_active)
+        elif style == "pill":
+            self._paint_pill(p, cx, cy, accent, accent_deep, lit, is_active)
+        elif style == "constellation":
+            self._paint_constellation(p, cx, cy, accent, accent_deep, lit, is_active)
         else:
             self._paint_sphere(p, cx, cy, accent, accent_deep, lit, is_active)
 
@@ -517,6 +523,180 @@ class OrbOverlay(QWidget):
         p.setPen(QPen(GLASS_RIM, 1.0))
         p.setBrush(col)
         p.drawEllipse(cx - r, cy - r, r * 2, r * 2)
+
+    # ------------------------------------------------------------------
+    # Renderer: ping (v0.9.6 — mic-reactive expanding sonar rings)
+    # ------------------------------------------------------------------
+    def _paint_ping(
+        self,
+        p: QPainter,
+        cx: int,
+        cy: int,
+        accent: QColor,
+        accent_deep: QColor,
+        lit: float,
+        is_active: bool,
+    ) -> None:
+        """Center dot with 3 concentric rings that swell outward in sync
+        with mic level. Idle = single faint ring. Recording = bright
+        rings reaching the widget edge, brightness modulated by audio
+        level so the user can SEE their own voice."""
+        max_r = int(self.DOT_RADIUS + self.PADDING - 6)
+        level = self._level_smooth
+        breath = 0.5 + 0.5 * math.sin(self._pulse_phase * 1.2)
+
+        # Center dot
+        core_r = max(4, int(self.DOT_RADIUS * 0.55 + self._level_smooth * 4))
+        col = QColor(accent if is_active or lit > 0.4 else _DIM_DOT)
+        col.setAlpha(min(255, 130 + int(125 * lit)))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(col)
+        p.drawEllipse(cx - core_r, cy - core_r, core_r * 2, core_r * 2)
+
+        # 3 rings — each at a different phase of the pulse so they look
+        # like they're moving outward continuously when animated.
+        ring_count = 3
+        for i in range(ring_count):
+            phase = (self._pulse_phase * 0.9 + i * (2 * math.pi / ring_count)) % (2 * math.pi)
+            t = (phase / (2 * math.pi))  # 0..1 — ring position from center → edge
+            # Audio level boosts how far rings reach AND their intensity
+            reach = self.DOT_RADIUS + 8 + int((max_r - self.DOT_RADIUS - 8) * t)
+            base_alpha = (1.0 - t) ** 1.6  # fade as ring expands
+            alpha = int((28 + 150 * (level if is_active else 0.20 * breath)) * base_alpha * lit)
+            if alpha <= 2:
+                continue
+            ring_col = QColor(accent)
+            ring_col.setAlpha(min(255, alpha))
+            p.setPen(QPen(ring_col, 1.8))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(cx - reach, cy - reach, reach * 2, reach * 2)
+
+    # ------------------------------------------------------------------
+    # Renderer: pill (v0.9.6 — compact status badge with dot)
+    # ------------------------------------------------------------------
+    def _paint_pill(
+        self,
+        p: QPainter,
+        cx: int,
+        cy: int,
+        accent: QColor,
+        accent_deep: QColor,
+        lit: float,
+        is_active: bool,
+    ) -> None:
+        """Horizontal pill with a small status dot and (during active
+        states) a brief text label. Compact, reads like a toast."""
+        from PyQt6.QtGui import QFont
+
+        # Label
+        label_map = {
+            "idle": "",
+            "recording": "REC",
+            "transcribing": "...",
+            "done": "OK",
+            "error": "ERR",
+        }
+        label = label_map.get(self._state, "")
+        if self._state == "idle" and lit < 0.1:
+            label = ""
+
+        # Sizing
+        pill_h = max(20, int(self.DOT_RADIUS * 1.6))
+        text_pad = 10 if label else 0
+        # Measure text width
+        font = QFont()
+        font.setPointSize(9)
+        font.setBold(True)
+        font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 110)
+        p.setFont(font)
+        text_w = p.fontMetrics().horizontalAdvance(label) if label else 0
+        dot_d = max(6, int(pill_h * 0.42))
+        # left padding + dot + gap + text + right padding
+        pill_w = 12 + dot_d + (8 + text_w if label else 0) + 12
+
+        pill_x = cx - pill_w // 2
+        pill_y = cy - pill_h // 2
+
+        # Background
+        bg = QColor(10, 22, 40, 235)
+        p.setBrush(bg)
+        col = QColor(accent if is_active or lit > 0.4 else QColor(80, 90, 110))
+        col.setAlpha(min(255, 90 + int(165 * lit)))
+        p.setPen(QPen(col, 1.4))
+        p.drawRoundedRect(pill_x, pill_y, pill_w, pill_h, pill_h // 2, pill_h // 2)
+
+        # Status dot
+        dot_x = pill_x + 12
+        dot_y = cy - dot_d // 2
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(col)
+        p.drawEllipse(dot_x, dot_y, dot_d, dot_d)
+
+        # Text
+        if label:
+            text_col = QColor(col)
+            text_col.setAlpha(255)
+            p.setPen(text_col)
+            text_x = dot_x + dot_d + 8
+            p.drawText(QRect(text_x, pill_y, text_w + 4, pill_h),
+                       int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+                       label)
+
+    # ------------------------------------------------------------------
+    # Renderer: constellation (v0.9.6 — rotating dots around a center)
+    # ------------------------------------------------------------------
+    def _paint_constellation(
+        self,
+        p: QPainter,
+        cx: int,
+        cy: int,
+        accent: QColor,
+        accent_deep: QColor,
+        lit: float,
+        is_active: bool,
+    ) -> None:
+        """Central node with 6 satellite dots orbiting at 2 different
+        radii. The whole formation slowly rotates; mic level brightens
+        the connecting lines."""
+        rot = self._pulse_phase * 0.5  # rotation in radians, slow
+        # Two orbit radii — front/back layered
+        radii = [int(self.DOT_RADIUS * 1.5), int(self.DOT_RADIUS * 2.4)]
+        counts = [3, 4]
+        level = self._level_smooth
+
+        # Connecting lines first (so dots draw on top)
+        if lit > 0.05:
+            line_alpha = int((30 + 130 * (level if is_active else 0.30)) * lit)
+            line_col = QColor(accent)
+            line_col.setAlpha(min(255, line_alpha))
+            p.setPen(QPen(line_col, 1.2))
+            for ri, (radius, count) in enumerate(zip(radii, counts)):
+                for j in range(count):
+                    a = rot + ri * 0.7 + j * (2 * math.pi / count)
+                    dx = cx + int(math.cos(a) * radius)
+                    dy = cy + int(math.sin(a) * radius)
+                    p.drawLine(cx, cy, dx, dy)
+
+        # Center node
+        core_r = max(5, int(self.DOT_RADIUS * 0.55 + self._level_smooth * 3))
+        col = QColor(accent if is_active or lit > 0.4 else _DIM_DOT)
+        col.setAlpha(min(255, 140 + int(115 * lit)))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(col)
+        p.drawEllipse(cx - core_r, cy - core_r, core_r * 2, core_r * 2)
+
+        # Satellite dots
+        for ri, (radius, count) in enumerate(zip(radii, counts)):
+            for j in range(count):
+                a = rot + ri * 0.7 + j * (2 * math.pi / count)
+                dx = cx + int(math.cos(a) * radius)
+                dy = cy + int(math.sin(a) * radius)
+                # Outer ring dots smaller + dimmer to suggest depth
+                size = max(3, int(self.DOT_RADIUS * (0.32 if ri == 0 else 0.22)))
+                dot_col = QColor(accent if is_active or lit > 0.4 else QColor(80, 90, 110))
+                dot_col.setAlpha(min(255, (170 if ri == 0 else 130) + int(85 * lit)))
+                p.setBrush(dot_col)
+                p.drawEllipse(dx - size, dy - size, size * 2, size * 2)
 
     def _draw_satellites(
         self, p: QPainter, cx: int, cy: int, accent: QColor
@@ -926,7 +1106,36 @@ class ChoiceBubblePopup(QWidget):
         if idx >= 0:
             key = self._options[idx][0]
             self._on_pick(key)
-            self.close()
+            # v0.9.6 (TJ-feedback): don't slam the popup shut on the
+            # first click — keep it open so the user can see the new
+            # selection's highlight, AND change their mind if they want.
+            # Update the visual selection state immediately, then
+            # auto-close after a short dwell.
+            self._current = key
+            self.update()
+            self._schedule_auto_close()
+
+    def _schedule_auto_close(self) -> None:
+        if not hasattr(self, "_auto_close_timer") or self._auto_close_timer is None:
+            self._auto_close_timer = QTimer(self)
+            self._auto_close_timer.setSingleShot(True)
+            self._auto_close_timer.timeout.connect(self.close)
+        self._auto_close_timer.start(1500)
+
+    def leaveEvent(self, _e) -> None:  # noqa: N802 — Qt name
+        # User moved the mouse away — start a faster close timer (they're
+        # done with the picker). Don't close immediately so a slight
+        # hover-out doesn't punish them.
+        if not hasattr(self, "_leave_close_timer") or self._leave_close_timer is None:
+            self._leave_close_timer = QTimer(self)
+            self._leave_close_timer.setSingleShot(True)
+            self._leave_close_timer.timeout.connect(self.close)
+        self._leave_close_timer.start(800)
+
+    def enterEvent(self, _e) -> None:  # noqa: N802
+        # User came back — cancel any pending close.
+        if hasattr(self, "_leave_close_timer") and self._leave_close_timer is not None:
+            self._leave_close_timer.stop()
 
     def _idx_at(self, x: float, y: float) -> int:
         bx = self.PADDING

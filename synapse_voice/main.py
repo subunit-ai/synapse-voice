@@ -798,6 +798,11 @@ class SynapseVoiceApp(QObject):
         if dlg.exec():
             old_hotkey = self.config.hotkey
             old_mode = self.config.recording_mode
+            # v0.9.6 (TJ): remember orb-style + use_orb_overlay so we can
+            # rebuild the live overlay without restart when the user
+            # picks a different style.
+            old_orb_style = getattr(self.config, "orb_overlay_style", "sphere")
+            old_use_orb = bool(getattr(self.config, "use_orb_overlay", True))
             dlg.apply_to(self.config)
             # Settings can change credentials/endpoint/model — drop the cached
             # transcriber instances so the next call uses the new values.
@@ -813,6 +818,13 @@ class SynapseVoiceApp(QObject):
                 self.hotkey.update(
                     self.config.hotkey, mode=self.config.recording_mode
                 )
+            # v0.9.6: live-apply orb-style change. Without this the user
+            # picks "Sonar Ping" in Settings → saves → orb keeps showing
+            # the old sphere until the next app launch.
+            new_orb_style = getattr(self.config, "orb_overlay_style", "sphere")
+            new_use_orb = bool(getattr(self.config, "use_orb_overlay", True))
+            if new_use_orb != old_use_orb or new_orb_style != old_orb_style:
+                self._recreate_orb_overlay()
             self.tray.set_mode(self.config.mode)
             try:
                 self.main_window.refresh_mode()
@@ -823,6 +835,22 @@ class SynapseVoiceApp(QObject):
                 f"Updated. Hotkey: {self.config.hotkey} · Mode: {self.config.mode}",
                 msecs=2500,
             )
+
+    def _recreate_orb_overlay(self) -> None:
+        """Destroy + rebuild the overlay widget so a Settings change to
+        ``orb_overlay_style`` or ``use_orb_overlay`` takes effect live
+        without restarting the app."""
+        try:
+            if self.orb is not None:
+                self.orb.hide()
+                self.orb.deleteLater()
+                self.orb = None
+        except Exception:
+            pass
+        if self.config.use_orb_overlay:
+            self.orb = OrbOverlay(self.config, on_change_mode=self.change_mode)
+            self.orb.set_level_provider(lambda: self.recorder.level)
+            self.orb.show()
 
     def _prompt_for_credentials(self, message: str) -> None:
         from PyQt6.QtWidgets import QMessageBox
