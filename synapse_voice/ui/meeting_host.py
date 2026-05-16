@@ -38,11 +38,15 @@ from ..config import Config
 from ..meet_client import (
     Meeting,
     Participant,
+    approve_participant,
     create_meeting,
     end_meeting,
+    host_self_join,
     list_participants,
+    reject_participant,
     start_meeting,
 )
+from ..meet_host_stream import HostStreamer
 
 _log = logging.getLogger(__name__)
 
@@ -166,6 +170,8 @@ class MeetingHostDialog(QDialog):
         self._config = config
         self._meeting: Meeting | None = None
         self._poll_timer: QTimer | None = None
+        self._host_join_token: str | None = None
+        self._host_streamer: HostStreamer | None = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -319,6 +325,19 @@ class MeetingHostDialog(QDialog):
             self.qr_label.setPixmap(pix)
         else:
             self.qr_label.setText("(QR-Render fehlgeschlagen — Code/Link reichen)")
+        # Self-register the host as a participant so their own mic flows
+        # through the same /audio/{token} WS as the guests'. The post-
+        # pipeline labels their segments with `host_name` — no special-
+        # casing needed downstream.
+        host_name = (self._config.account_email or "").split("@")[0] or "Host"
+        self._host_join_token = host_self_join(
+            self._config.subunit_endpoint,
+            meeting.code,
+            host_name=host_name,
+            host_email=self._config.account_email or None,
+        )
+        if not self._host_join_token:
+            _log.warning("[meet] host self-join failed — host mic won't be in recap")
         # Start polling participants every 2 seconds.
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(2000)
@@ -348,17 +367,29 @@ class MeetingHostDialog(QDialog):
 
     def _on_poll_done(self, items: list[Participant]) -> None:
         self.participants_list.clear()
-        for p in items:
+        # Sort pending guests to the top so the host can act fast.
+        items_sorted = sorted(items, key=lambda p: (not p.pending, p.joined_at_relative))
+        for p in items_sorted:
             it = QListWidgetItem()
-            it.setText(self._render_participant(p))
-            self.participants_list.addItem(it)
+            if p.pending:
+                # Pending guests: embed ✓ / ✗ buttons via setItemWidget.
+                row = self._build_pending_row(p)
+                it.setSizeHint(row.sizeHint())
+                self.participants_list.addItem(it)
+                self.participants_list.setItemWidget(it, row)
+            else:
+                it.setText(self._render_participant(p))
+                self.participants_list.addItem(it)
         n = len(items)
+        pending = sum(1 for p in items if p.pending)
         if n == 0:
             self.participant_count_lbl.setText("0 Teilnehmer — warte auf Beitritte…")
-        else:
+        elif pending > 0:
             self.participant_count_lbl.setText(
-                f"{n} Teilnehmer eingecheckt"
+                f"{n} Teilnehmer · {pending} wartet auf Freigabe"
             )
+        else:
+            self.participant_count_lbl.setText(f"{n} Teilnehmer eingecheckt")
 
     def _render_participant(self, p: Participant) -> str:
         # Render as "✓ Name           via QR · vor 12 Sek"
@@ -370,6 +401,69 @@ class MeetingHostDialog(QDialog):
         }.get(p.source, p.source)
         return f"✓ {p.name}    ·    {source_label}    ·    {p.joined_at_relative}"
 
+    def _build_pending_row(self, p: Participant) -> QWidget:
+        """A clickable row: name + ✓ Zulassen + ✗ Rauswerfen buttons."""
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(8, 4, 8, 4)
+        h.setSpacing(8)
+        source_label = {"qr": "via QR", "code": "Code-tipp", "web": "Web"}.get(p.source, p.source)
+        lbl = QLabel(f"⏳ <b>{p.name}</b>    ·    {source_label}    ·    {p.joined_at_relative}")
+        lbl.setStyleSheet(f"color: {AMBER}; font-size: 13px;")
+        h.addWidget(lbl, 1)
+        btn_ok = QPushButton("✓ Zulassen")
+        btn_ok.setStyleSheet(
+            f"QPushButton {{ background: {EMERALD}; color: {NIGHT}; font-weight: 700;"
+            f"  border: none; border-radius: 6px; padding: 6px 12px; font-size: 12px; }}"
+            f"QPushButton:hover {{ background: #34d399; }}"
+        )
+        btn_ok.clicked.connect(lambda _=False, t=p.token: self._on_approve_clicked(t))
+        h.addWidget(btn_ok)
+        btn_no = QPushButton("✗")
+        btn_no.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {RED}; font-weight: 700;"
+            f"  border: 1px solid {RED}; border-radius: 6px; padding: 6px 10px; font-size: 12px; }}"
+            f"QPushButton:hover {{ background: rgba(255,107,107,0.12); }}"
+        )
+        btn_no.setToolTip("Rauswerfen")
+        btn_no.clicked.connect(lambda _=False, t=p.token: self._on_reject_clicked(t))
+        h.addWidget(btn_no)
+        return row
+
+    def _on_approve_clicked(self, participant_token: str) -> None:
+        if not self._meeting or not participant_token:
+            return
+        ok = approve_participant(
+            self._config.subunit_endpoint,
+            self._meeting.code,
+            participant_token,
+            self._meeting.host_token,
+        )
+        if not ok:
+            _log.warning("[meet] approve failed for token %s…", participant_token[:8])
+        # Re-poll right away so the row updates without the 2s wait.
+        self._poll_participants()
+
+    def _on_reject_clicked(self, participant_token: str) -> None:
+        if not self._meeting or not participant_token:
+            return
+        confirm = QMessageBox.question(
+            self,
+            "Teilnehmer rauswerfen?",
+            "Der Teilnehmer kann nicht mehr beitreten und sieht eine Ablehnungs-Nachricht. "
+            "Weiter?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        reject_participant(
+            self._config.subunit_endpoint,
+            self._meeting.code,
+            participant_token,
+            self._meeting.host_token,
+        )
+        self._poll_participants()
+
     def _on_start_clicked(self) -> None:
         if not self._meeting:
             return
@@ -380,6 +474,39 @@ class MeetingHostDialog(QDialog):
         ):
             QMessageBox.warning(self, "Fehler", "Aufnahme konnte nicht gestartet werden.")
             return
+
+        # Begin streaming the host's local mic to the same /audio/{token}
+        # WebSocket the guests use. Failures are non-fatal — the guests'
+        # streams alone are still enough to produce a recap.
+        if self._host_join_token:
+            try:
+                # Resolve mic device the same way main.py does — by saved name.
+                device = None
+                mic_name = getattr(self._config, "mic_device_name", "") or ""
+                if mic_name:
+                    import sounddevice as _sd
+                    for idx, dev in enumerate(_sd.query_devices()):
+                        if int(dev.get("max_input_channels", 0)) > 0 and dev.get("name") == mic_name:
+                            device = idx
+                            break
+                self._host_streamer = HostStreamer(
+                    endpoint=self._config.subunit_endpoint,
+                    code=self._meeting.code,
+                    join_token=self._host_join_token,
+                    device=device,
+                )
+                self._host_streamer.start()
+            except Exception as e:  # noqa: BLE001
+                _log.warning("[meet] host streamer failed to start: %s", e)
+                self._host_streamer = None
+                QMessageBox.information(
+                    self,
+                    "Host-Mic nicht im Recap",
+                    "Aufnahme läuft, aber dein Mic ist nicht im automatischen "
+                    "Protokoll. Die Gäste-Streams werden trotzdem verarbeitet.\n\n"
+                    f"Grund: {e}",
+                )
+
         self.btn_start.setObjectName("rec-active")
         self.btn_start.setText("🔴 Aufnahme läuft")
         self.btn_start.setEnabled(False)
@@ -401,6 +528,14 @@ class MeetingHostDialog(QDialog):
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
+        # Stop the host mic stream FIRST so ffmpeg flushes the webm
+        # container before /end fires the post-meeting pipeline.
+        if self._host_streamer is not None:
+            try:
+                self._host_streamer.stop(timeout=6.0)
+            except Exception as e:  # noqa: BLE001
+                _log.warning("[meet] host streamer stop error: %s", e)
+            self._host_streamer = None
         end_meeting(
             self._config.subunit_endpoint,
             self._meeting.code,
@@ -428,6 +563,27 @@ class MeetingHostDialog(QDialog):
     # Cleanup
     # ------------------------------------------------------------------
     def closeEvent(self, event) -> None:
+        # Codex review v0.9.2 #3: stop the streamer + end the meeting
+        # before tearing the dialog down. Without this, closing the
+        # window mid-recording would leave the mic open and the WS
+        # uploading audio that never makes it into a recap.
+        if self._host_streamer is not None:
+            try:
+                self._host_streamer.stop(timeout=4.0)
+            except Exception as e:  # noqa: BLE001
+                _log.warning("[meet] closeEvent: streamer stop error: %s", e)
+            self._host_streamer = None
+        if self._meeting and self._meeting.host_token:
+            # Best-effort — server-side WS handler also checks status,
+            # so even if this fails the pipeline won't poison the recap.
+            try:
+                end_meeting(
+                    self._config.subunit_endpoint,
+                    self._meeting.code,
+                    self._meeting.host_token,
+                )
+            except Exception as e:  # noqa: BLE001
+                _log.warning("[meet] closeEvent: end_meeting error: %s", e)
         if self._poll_timer:
             self._poll_timer.stop()
         super().closeEvent(event)

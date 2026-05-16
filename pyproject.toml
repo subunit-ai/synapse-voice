@@ -12,6 +12,9 @@ dependencies = [
     "pynput>=1.7",
     "requests>=2.31",
     "faster-whisper>=1.0",
+    # v0.9.2: host-mic WebSocket streaming for meet.subunit.ai meetings.
+    # We use the websockets package (asyncio-friendly, no extra deps).
+    "websockets>=12",
 ]
 
 [project.scripts]

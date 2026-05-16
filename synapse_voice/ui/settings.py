@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QStackedWidget,
     QTableWidget,
@@ -229,13 +230,18 @@ class SettingsDialog(QDialog):
         self.tabs = QTabWidget()
         outer.addWidget(self.tabs, 1)
 
-        self.tabs.addTab(self._build_general_tab(), "General")
-        self.tabs.addTab(self._build_transcription_tab(), "Transcription")
-        self.tabs.addTab(self._build_vocabulary_tab(), "Vocabulary")
-        self.tabs.addTab(self._build_auto_mode_tab(), "Auto-Mode")
-        self.tabs.addTab(self._build_overlay_tab(), "Overlay")
-        self.tabs.addTab(self._build_account_tab(), "Account")
-        self.tabs.addTab(self._build_about_tab(), "About")
+        # TJ-Feedback 2026-05-16: tabs were not scrollable, so on smaller
+        # windows (or tabs with a lot of content like Auto-Mode and
+        # Vocabulary) the bottom controls were unreachable. Wrap every
+        # tab page in a QScrollArea so the dialog can stay compact while
+        # any tab can grow as tall as it needs to.
+        self.tabs.addTab(self._wrap_scroll(self._build_general_tab()),       "General")
+        self.tabs.addTab(self._wrap_scroll(self._build_transcription_tab()), "Transcription")
+        self.tabs.addTab(self._wrap_scroll(self._build_vocabulary_tab()),    "Vocabulary")
+        self.tabs.addTab(self._wrap_scroll(self._build_auto_mode_tab()),     "Auto-Mode")
+        self.tabs.addTab(self._wrap_scroll(self._build_overlay_tab()),       "Overlay")
+        self.tabs.addTab(self._wrap_scroll(self._build_account_tab()),       "Account")
+        self.tabs.addTab(self._wrap_scroll(self._build_about_tab()),         "About")
 
         # Buttons
         buttons = QDialogButtonBox(
@@ -245,6 +251,30 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
+
+    # ── Tab scroll wrapper ─────────────────────────────────────────────────
+
+    def _wrap_scroll(self, page: QWidget) -> QScrollArea:
+        """Wrap a tab page in a QScrollArea so its content is always reachable.
+
+        TJ-Feedback 2026-05-16: bottom-of-tab controls were unreachable on
+        smaller dialog heights / smaller laptop screens. With this wrapper
+        every tab gets a vertical scrollbar when the content overflows the
+        tab's viewport height.
+
+        Notes:
+        • setWidgetResizable(True) makes the inner widget match the scroll
+          area's width — so we don't get an unwanted horizontal scrollbar
+          when the dialog is narrow.
+        • frameShape Plain keeps the visual flush with the tab background.
+        """
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setWidget(page)
+        return scroll
 
     # ── Tab 1: General ─────────────────────────────────────────────────────
 
@@ -982,7 +1012,40 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(2, 18, 2, 18)
         layout.setSpacing(14)
 
-        layout.addWidget(_section_title("Subunit account"))
+        # ── New (v0.9.5): browser-based Subunit-Account login ────────────
+        layout.addWidget(_section_title("Subunit-Account (empfohlen)"))
+
+        self.subunit_login_status_lbl = QLabel("")
+        self.subunit_login_status_lbl.setWordWrap(True)
+        layout.addWidget(self.subunit_login_status_lbl)
+
+        login_row = QHBoxLayout()
+        login_row.setSpacing(10)
+        self.subunit_login_btn = QPushButton("Mit Subunit-Account anmelden")
+        self.subunit_login_btn.setObjectName("primary")
+        self.subunit_login_btn.clicked.connect(self._on_subunit_login)
+        login_row.addWidget(self.subunit_login_btn)
+
+        self.subunit_logout_btn = QPushButton("Abmelden")
+        self.subunit_logout_btn.clicked.connect(self._on_subunit_logout)
+        login_row.addWidget(self.subunit_logout_btn)
+        login_row.addStretch(1)
+        layout.addLayout(login_row)
+
+        layout.addSpacing(6)
+        layout.addWidget(_hint(
+            "Öffnet auth.subunit.ai im Browser — du loggst dich dort mit "
+            "deinem Subunit-Konto ein (oder erstellst eines), Sonar bekommt "
+            "danach automatisch einen Token. Dein Passwort bleibt im Browser.\n\n"
+            "Diese Authentifizierung ist DSGVO-konform und ersetzt mittelfristig "
+            "die API-Key-Methode unten."
+        ))
+
+        # Update the status line + button states from current config.
+        self._refresh_subunit_login_status()
+
+        layout.addSpacing(14)
+        layout.addWidget(_section_title("Legacy: API-Key (wird ausgemustert)"))
 
         self.account_status_lbl = QLabel("")
         self.account_status_lbl.setWordWrap(True)
@@ -999,7 +1062,6 @@ class SettingsDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
         self.account_signin_btn = QPushButton("Get my Subunit key")
-        self.account_signin_btn.setObjectName("primary")
         self.account_signin_btn.clicked.connect(self._on_account_signin)
         btn_row.addWidget(self.account_signin_btn)
 
@@ -1011,10 +1073,10 @@ class SettingsDialog(QDialog):
 
         layout.addSpacing(8)
         layout.addWidget(_hint(
-            "Type your email and click the button — we'll create your account "
-            "and install your API key automatically. Same email always returns "
-            "the same key, so re-installing the app just works.\n\n"
-            "No password yet (coming in a future update)."
+            "Legacy: nur wenn du dich noch nicht mit dem Subunit-Account "
+            "anmelden willst. Email + Button erstellt automatisch einen "
+            "API-Key für dich. Same email = same key, also re-install "
+            "funktioniert."
         ))
 
         # v0.3.29 — Subunit Suite: Voice → Synapse Knowledge Base bridge
@@ -1212,6 +1274,116 @@ class SettingsDialog(QDialog):
         self.account_email_edit.setText("")
         self.subunit_key_edit.setText("")
         self._refresh_account_status()
+
+    # ── Subunit-Account browser-login flow (v0.9.5) ─────────────────────
+
+    def _refresh_subunit_login_status(self) -> None:
+        """Sync the status label + button states with the current config."""
+        access = (self.config.subunit_access_token or "").strip()
+        if access:
+            email = (self.config.account_email or "—").strip() or "—"
+            self.subunit_login_status_lbl.setText(
+                f"✓ Angemeldet als <b>{email}</b>"
+            )
+            self.subunit_login_status_lbl.setTextFormat(Qt.TextFormat.RichText)
+            self.subunit_login_btn.setText("Erneut anmelden")
+            self.subunit_logout_btn.setEnabled(True)
+        else:
+            self.subunit_login_status_lbl.setText(
+                "Noch nicht angemeldet."
+            )
+            self.subunit_login_btn.setText("Mit Subunit-Account anmelden")
+            self.subunit_logout_btn.setEnabled(False)
+
+    def _on_subunit_login(self) -> None:
+        """Kick off the browser-based login flow on a background thread.
+
+        Blocking the Qt event loop while we wait 5 minutes for a callback
+        would freeze the entire app; thread it and post the result back
+        via QTimer.singleShot from a Python thread.
+        """
+        from PyQt6.QtCore import QTimer
+        from PyQt6.QtWidgets import QMessageBox
+        import threading
+
+        from ..subunit_auth import login_interactive, fetch_me
+
+        self.subunit_login_btn.setEnabled(False)
+        self.subunit_login_btn.setText("Browser öffnet sich …")
+        self.subunit_login_status_lbl.setText(
+            "Im Browser anmelden — diese Settings bleiben offen, "
+            "warten auf den Login …"
+        )
+
+        result_box: list = []
+
+        def run() -> None:
+            try:
+                tokens = login_interactive()
+                if tokens is None:
+                    result_box.append({"error": "Timeout oder abgebrochen."})
+                    return
+                me = fetch_me(tokens.access_token) or {}
+                result_box.append({
+                    "tokens": tokens,
+                    "email": me.get("email") or me.get("user", {}).get("email", ""),
+                })
+            except Exception as exc:  # noqa: BLE001
+                result_box.append({"error": str(exc)})
+
+        threading.Thread(target=run, name="subunit-login-ui", daemon=True).start()
+
+        # Poll the result_box on the Qt thread every 250 ms (cheap).
+        def check() -> None:
+            if not result_box:
+                QTimer.singleShot(250, check)
+                return
+            result = result_box[0]
+            if "error" in result:
+                self._refresh_subunit_login_status()
+                self.subunit_login_btn.setEnabled(True)
+                QMessageBox.warning(
+                    self, "Sonar — Login",
+                    f"Anmeldung fehlgeschlagen: {result['error']}",
+                )
+                return
+            tokens = result["tokens"]
+            email = (result.get("email") or "").strip()
+
+            self.config.subunit_access_token = tokens.access_token
+            self.config.subunit_refresh_token = tokens.refresh_token
+            self.config.subunit_token_issued_at = tokens.issued_at
+            self.config.subunit_token_expires_in = tokens.expires_in
+            self.config.subunit_workspace_id = tokens.workspace_id or ""
+            if email:
+                self.config.account_email = email
+            self.config.save()
+
+            self.subunit_login_btn.setEnabled(True)
+            self._refresh_subunit_login_status()
+            QMessageBox.information(
+                self, "Sonar — Login",
+                "Erfolgreich angemeldet. Cloud-Transkription nutzt jetzt deinen Subunit-Account.",
+            )
+
+        QTimer.singleShot(250, check)
+
+    def _on_subunit_logout(self) -> None:
+        from PyQt6.QtWidgets import QMessageBox
+
+        if QMessageBox.question(
+            self, "Sonar — Abmelden",
+            "Subunit-Account von Sonar abmelden? Die Cloud-Transkription "
+            "wechselt dann zurück zum API-Key (falls vorhanden) oder zu Lokal.",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        self.config.subunit_access_token = ""
+        self.config.subunit_refresh_token = ""
+        self.config.subunit_token_issued_at = 0.0
+        self.config.subunit_token_expires_in = 0
+        self.config.subunit_workspace_id = ""
+        self.config.save()
+        self._refresh_subunit_login_status()
 
     # ── Tab 3: About ───────────────────────────────────────────────────────
 

@@ -153,6 +153,24 @@ class Config:
     plan: str = "free"  # free | trial | pro
     trial_started_at: int = 0  # unix seconds, 0 = never started
 
+    # v0.9.5 (2026-05-16): Subunit-Account tokens (auth.subunit.ai).
+    # Replaces the per-user API-key flow. After a successful browser
+    # login via subunit_auth.login_interactive(), these are populated
+    # and the cloud transcriber uses them as a Bearer token. Storage
+    # is plaintext in the same JSON config that already holds API keys
+    # — same trust boundary.
+    subunit_access_token: str = ""
+    subunit_refresh_token: str = ""
+    subunit_token_issued_at: float = 0.0  # epoch seconds
+    subunit_token_expires_in: int = 0     # seconds since issued_at
+    subunit_workspace_id: str = ""
+
+    # 2026-05-16: Cloud-side Quality vs Fast switch (Subunit provider).
+    # "quality" → large-v3-turbo (current default, best accuracy).
+    # "fast" → distil-large-v3 (~3-6× faster, instant-paste feel).
+    # Persisted across launches; surfaced in the main-window detail card.
+    cloud_quality_mode: str = "quality"  # "quality" | "fast"
+
     # v0.4: Subtle UI sounds — start ping on record, pop on done.
     sound_enabled: bool = True
     sound_volume: float = 0.6  # 0.0..1.0
@@ -210,3 +228,13 @@ class Config:
     def save(self) -> None:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.write_text(json.dumps(asdict(self), indent=2))
+        # 2026-05-16 (Codex P2): the config holds refresh_tokens + BYO
+        # API keys. Tighten the file mode to 0600 (owner read/write only)
+        # so a shared-machine attacker can't grep the home dir for it.
+        # POSIX-only — Windows just inherits ACLs from the parent.
+        try:
+            import os
+            if hasattr(os, "chmod"):
+                os.chmod(CONFIG_FILE, 0o600)
+        except Exception:
+            pass

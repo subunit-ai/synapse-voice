@@ -115,7 +115,17 @@ def _cache_key(mode: str, config) -> tuple:
             _vocab_prompt(config),
         )
     if mode == "subunit":
-        return (mode, config.subunit_endpoint, getattr(config, "subunit_api_key", ""))
+        # v0.9.5: token-based auth is preferred; cache key includes the
+        # access_token so a fresh login re-creates the transcriber.
+        # 2026-05-16: cloud_quality_mode in the key so toggling Fast↔Quality
+        # in the UI rebuilds the transcriber with the new value.
+        return (
+            mode,
+            config.subunit_endpoint,
+            getattr(config, "subunit_api_key", ""),
+            getattr(config, "subunit_access_token", ""),
+            getattr(config, "cloud_quality_mode", "quality"),
+        )
     if mode == "openai":
         return (mode, config.openai_api_key, config.openai_model)
     if mode == "groq":
@@ -152,6 +162,19 @@ def get_transcriber(mode: str, config) -> Transcriber:
     # but if a stray code path passes the legacy mode in we still translate.
     if mode == "openrouter":
         mode = "openai"
+    # JIT-refresh the Subunit access_token before we compute the cache key.
+    # If the token was refreshed, the new value is now in `config`, so the
+    # cache key will reflect it and we'll build a fresh transcriber. If
+    # refresh fails (or no tokens at all), we just continue and the call
+    # will fall back to legacy X-API-Key (or 401 if neither works).
+    if mode == "subunit":
+        try:
+            from ..subunit_auth import refresh_if_needed
+            refresh_if_needed(config)
+        except Exception:
+            # Never let a refresh hiccup block transcription — Bearer is
+            # one of two auth paths and X-API-Key may still work.
+            pass
     key = _cache_key(mode, config)
     cached = _TRANSCRIBER_CACHE.get(key)
     if cached is not None:
@@ -182,9 +205,15 @@ def get_transcriber(mode: str, config) -> Transcriber:
     elif mode == "subunit":
         from .subunit import SubunitTranscriber
 
+        # v0.9.5: try the Subunit-Account Bearer token first; fall back to
+        # legacy X-API-Key. Token-refresh is the UI's responsibility — by
+        # the time we construct the transcriber the access_token should be
+        # fresh enough (or the UI should have re-logged-in).
         inst = SubunitTranscriber(
             endpoint=config.subunit_endpoint,
             api_key=getattr(config, "subunit_api_key", ""),
+            bearer_token=getattr(config, "subunit_access_token", ""),
+            quality_mode=getattr(config, "cloud_quality_mode", "quality"),
         )
         inst.initial_prompt = _vocab_prompt(config)
     elif mode == "openai":

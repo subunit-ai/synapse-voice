@@ -24,9 +24,24 @@ def _audio_to_wav_bytes(audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> by
 
 
 class SubunitTranscriber:
-    def __init__(self, endpoint: str, api_key: str = "") -> None:
+    def __init__(
+        self,
+        endpoint: str,
+        api_key: str = "",
+        bearer_token: str = "",
+        quality_mode: str = "quality",
+    ) -> None:
         self.endpoint = endpoint
         self.api_key = api_key
+        # v0.9.5 (2026-05-16): support Subunit-Account Bearer tokens from
+        # auth.subunit.ai. When set, Bearer takes precedence over the
+        # legacy X-API-Key. The transcribe-server will accept either
+        # during the migration window.
+        self.bearer_token = bearer_token
+        # 2026-05-16: "quality" → large-v3-turbo, "fast" → distil-large-v3.
+        # Sent as a form field; server falls back to its default if it
+        # doesn't recognise the value (older transcribe-server builds).
+        self.quality_mode = (quality_mode or "quality").lower()
         # Set by base.get_transcriber() from the user's vocab list. Mirrors
         # the cloud + local providers so Whisper biases toward custom names
         # / jargon on the Subunit backend too.
@@ -37,10 +52,15 @@ class SubunitTranscriber:
             return ""
         wav_bytes = _audio_to_wav_bytes(audio)
         files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
-        data = {"language": language}
+        data = {"language": language, "quality_mode": self.quality_mode}
         if self.initial_prompt:
             data["prompt"] = self.initial_prompt
-        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        if self.bearer_token:
+            headers = {"Authorization": f"Bearer {self.bearer_token}"}
+        elif self.api_key:
+            headers = {"X-API-Key": self.api_key}
+        else:
+            headers = {}
         try:
             r = requests.post(
                 self.endpoint, headers=headers, files=files, data=data, timeout=60

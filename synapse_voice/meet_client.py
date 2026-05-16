@@ -42,6 +42,8 @@ class Participant:
     name: str
     joined_at_relative: str
     source: str
+    token: str = ""        # v0.9.4: needed for host approve/reject
+    pending: bool = False  # v0.9.4: true while waiting in the Warteraum
 
     @classmethod
     def from_dict(cls, d: dict) -> "Participant":
@@ -49,6 +51,8 @@ class Participant:
             name=str(d.get("name", "")),
             joined_at_relative=str(d.get("joined_at_relative", "")),
             source=str(d.get("source", "")),
+            token=str(d.get("token", "")),
+            pending=bool(d.get("pending", False)),
         )
 
 
@@ -93,6 +97,38 @@ def create_meeting(
         return None
 
 
+def host_self_join(
+    transcribe_endpoint: str,
+    code: str,
+    *,
+    host_name: str,
+    host_email: str | None,
+    timeout: float = 6.0,
+) -> Optional[str]:
+    """Self-register the host as a participant so the audio-stream WS
+    endpoint accepts their mic feed. Returns the join_token on success.
+
+    The post-pipeline treats this participant exactly like guests —
+    speaker label = host_name, recap email goes to host_email if given.
+    Distinguished only by `source="host"` so the UI can render them
+    differently in the check-in list."""
+    url = f"{_base_url(transcribe_endpoint)}/v1/meetings/{code}/join"
+    payload = {
+        "name": host_name or "Host",
+        "email": host_email or "host@subunit.local",  # required by API; harmless dummy
+        "source": "host",
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=timeout)
+        if r.status_code >= 400:
+            _log.warning("Meet/host-join HTTP %s: %s", r.status_code, r.text[:200])
+            return None
+        return r.json().get("join_token")
+    except requests.RequestException as e:
+        _log.warning("Meet/host-join failed: %s", e)
+        return None
+
+
 def list_participants(
     transcribe_endpoint: str,
     code: str,
@@ -110,6 +146,30 @@ def list_participants(
         return [Participant.from_dict(p) for p in body.get("participants") or []]
     except requests.RequestException:
         return None
+
+
+def approve_participant(
+    transcribe_endpoint: str, code: str, participant_token: str, host_token: str,
+    timeout: float = 6.0,
+) -> bool:
+    url = f"{_base_url(transcribe_endpoint)}/v1/meetings/{code}/participants/{participant_token}/approve"
+    try:
+        r = requests.post(url, params={"host_token": host_token}, timeout=timeout)
+        return r.ok
+    except requests.RequestException:
+        return False
+
+
+def reject_participant(
+    transcribe_endpoint: str, code: str, participant_token: str, host_token: str,
+    timeout: float = 6.0,
+) -> bool:
+    url = f"{_base_url(transcribe_endpoint)}/v1/meetings/{code}/participants/{participant_token}/reject"
+    try:
+        r = requests.post(url, params={"host_token": host_token}, timeout=timeout)
+        return r.ok
+    except requests.RequestException:
+        return False
 
 
 def start_meeting(transcribe_endpoint: str, code: str, host_token: str, timeout: float = 6.0) -> bool:

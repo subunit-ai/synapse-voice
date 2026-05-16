@@ -178,6 +178,37 @@ def lookup_by_key(api_key: str) -> dict | None:
         }
 
 
+def lookup_by_email(email: str) -> dict | None:
+    """Find a legacy per-user account by its email address.
+
+    Used by the JWT-auth path (v0.9.5) to preserve ChromaDB collection
+    continuity when a user migrates from X-API-Key → Subunit-Auth login:
+    we surface the legacy api_key so /v1/synapse/save keeps writing to
+    the SAME hashed collection name instead of splitting history.
+    """
+    if not email:
+        return None
+    with _conn() as c:
+        row = c.execute(
+            """
+            SELECT email, api_key, plan, created_at,
+                   trial_started_at, subscription_active_until
+            FROM accounts WHERE email = ?
+            """,
+            (email.strip().lower(),),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "email": row["email"],
+            "api_key": row["api_key"],
+            "plan": row["plan"],
+            "created_at": row["created_at"],
+            "trial_started_at": row["trial_started_at"] or 0,
+            "subscription_active_until": row["subscription_active_until"] or 0,
+        }
+
+
 def trial_expires_at(account: dict) -> int:
     """Compute trial expiry timestamp from `trial_started_at`. Returns 0
     if the account never started a trial (legacy / `plan='free'` accounts

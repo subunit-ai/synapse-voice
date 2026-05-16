@@ -24,6 +24,7 @@ from PyQt6.QtGui import (
     QRadialGradient,
 )
 from PyQt6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -108,6 +109,44 @@ QListWidget::item:selected {{
     background: #143246;
     color: {WHITE};
 }}
+/* 2026-05-16: recent-list lives inside a card frame, so kill its own
+   border/background and let the card chrome show through. */
+QListWidget#recentList {{
+    background: transparent;
+    border: none;
+    padding: 0;
+}}
+QListWidget#recentList::item {{
+    padding: 10px 6px;
+    border-bottom: 1px solid {NIGHT_BORDER};
+}}
+QListWidget#recentList::item:last-child {{
+    border-bottom: none;
+}}
+/* 2026-05-16: Quality / Fast segmented pills inside the Cloud detail card. */
+QPushButton#qualityPill {{
+    background: transparent;
+    color: {WHITE_DIM};
+    border: 1px solid {NIGHT_BORDER};
+    border-radius: 6px;
+    padding: 4px 12px;
+    min-width: 78px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}}
+QPushButton#qualityPillActive {{
+    background: {CYAN};
+    color: {NIGHT};
+    border: 1px solid {CYAN};
+    border-radius: 6px;
+    padding: 4px 12px;
+    min-width: 78px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}}
+QPushButton#qualityPill:hover {{ border-color: {CYAN}; color: {WHITE}; }}
 """
 
 
@@ -228,7 +267,7 @@ class BigModeSwitch(QWidget):
         f_sub.setWeight(QFont.Weight.Medium)
 
         for i, (icon, big, sub) in enumerate([
-            ("🔒", "100% PRIVATE", "Audio never leaves this device"),
+            ("🔒", "LOKAL", "Audio bleibt auf diesem Gerät"),
             ("☁", "CLOUD", "DSGVO • EU-Server • Subunit"),
         ]):
             half_x = rect.x() + i * half_w
@@ -290,15 +329,30 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("Sonar")
         self.setStyleSheet(QSS)
-        self.setMinimumSize(640, 520)
-        self.resize(720, 600)
+        # 2026-05-16: TJ flagged the old 720x600 default as cramped. Open
+        # at a roomy 1180x820 so all sections have breathing space without
+        # going full-screen by default (still resizable, still has a sane
+        # minimum). On small displays we fall back to slightly less than
+        # the available screen so we never spawn off-screen.
+        self.setMinimumSize(880, 640)
+        try:
+            screen = self.screen() or QApplication.primaryScreen()
+            avail = screen.availableGeometry() if screen else None
+            if avail and (avail.width() < 1200 or avail.height() < 860):
+                w = max(880, int(avail.width() * 0.92))
+                h = max(640, int(avail.height() * 0.92))
+                self.resize(w, h)
+            else:
+                self.resize(1180, 820)
+        except Exception:
+            self.resize(1180, 820)
 
         central = QWidget()
         central.setObjectName("central")
         self.setCentralWidget(central)
         outer = QVBoxLayout(central)
-        outer.setContentsMargins(24, 22, 24, 22)
-        outer.setSpacing(16)
+        outer.setContentsMargins(32, 26, 32, 26)
+        outer.setSpacing(22)
 
         # ── Header ─────────────────────────────────────────────────────────
         header = QHBoxLayout()
@@ -411,16 +465,32 @@ class MainWindow(QMainWindow):
         self._refresh_detail_card()
 
         # ── Recent transcriptions ──────────────────────────────────────────
-        recent_title = QLabel("Recent transcriptions")
+        # 2026-05-16: wrap the title + list in a real card so the section
+        # stops competing with the controls above. The list expands to
+        # fill remaining vertical space — in the new 1180x820 layout this
+        # is the dominant region by design.
+        recent_card = QFrame()
+        recent_card.setObjectName("card")
+        recent_box = QVBoxLayout(recent_card)
+        recent_box.setContentsMargins(18, 14, 18, 14)
+        recent_box.setSpacing(10)
+
+        recent_header = QHBoxLayout()
+        recent_title = QLabel("RECENT TRANSCRIPTIONS")
         recent_title.setObjectName("h2")
-        outer.addWidget(recent_title)
+        recent_header.addWidget(recent_title)
+        recent_header.addStretch()
+        recent_box.addLayout(recent_header)
 
         self.history_list = QListWidget()
+        self.history_list.setObjectName("recentList")
         self.history_list.setSelectionMode(self.history_list.SelectionMode.SingleSelection)
         self.history_list.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
-        outer.addWidget(self.history_list, 1)
+        self.history_list.setFrameShape(QFrame.Shape.NoFrame)
+        recent_box.addWidget(self.history_list, 1)
+        outer.addWidget(recent_card, 1)
 
         # ── Footer ─────────────────────────────────────────────────────────
         footer = QHBoxLayout()
@@ -559,6 +629,15 @@ class MainWindow(QMainWindow):
         title_box.addWidget(sub)
         self._detail_layout.addLayout(title_box, 1)
 
+        # 2026-05-16: Quality vs Fast toggle. Quality = large-v3-turbo
+        # (the current default, best accuracy). Fast = distil-large-v3
+        # for instant-paste feel on hotkey release. Only renders for
+        # the Subunit cloud provider — Groq/OpenAI/Custom use their own
+        # model selection.
+        if self.config.mode == "subunit":
+            quality_box = self._build_quality_toggle()
+            self._detail_layout.addLayout(quality_box, 0)
+
         cur = self.config.mode
         chip_label = mode_label(cur).split("·")[0].strip()
         chip = QPushButton(chip_label)
@@ -567,6 +646,54 @@ class MainWindow(QMainWindow):
         chip.setCursor(Qt.CursorShape.PointingHandCursor)
         chip.clicked.connect(lambda: self._popup_cloud_menu(chip))
         self._detail_layout.addWidget(chip, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def _build_quality_toggle(self) -> QVBoxLayout:
+        """Two-pill segmented control: QUALITY | FAST."""
+        from PyQt6.QtWidgets import QButtonGroup
+
+        col = QVBoxLayout()
+        col.setSpacing(4)
+        lbl = QLabel("Mode")
+        lbl.setObjectName("dim")
+        lbl.setStyleSheet(f"color: {WHITE_DIM}; font-size: 11px; letter-spacing: 1px;")
+        col.addWidget(lbl)
+
+        row = QHBoxLayout()
+        row.setSpacing(0)
+
+        current = (getattr(self.config, "cloud_quality_mode", "quality") or "quality").lower()
+        group = QButtonGroup(self)
+        group.setExclusive(True)
+        for value, label in (("quality", "QUALITY"), ("fast", "FAST")):
+            b = QPushButton(label)
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setMinimumWidth(82)
+            b.setObjectName("qualityPillActive" if value == current else "qualityPill")
+            b.setProperty("modeValue", value)
+            if value == current:
+                b.setChecked(True)
+            b.clicked.connect(lambda _=False, v=value: self._on_quality_mode_changed(v))
+            group.addButton(b)
+            row.addWidget(b)
+        col.addLayout(row)
+        return col
+
+    def _on_quality_mode_changed(self, value: str) -> None:
+        if value not in ("quality", "fast"):
+            return
+        if getattr(self.config, "cloud_quality_mode", "quality") == value:
+            return
+        self.config.cloud_quality_mode = value
+        self.config.save()
+        # Bust the transcriber cache so the next call carries the new
+        # quality_mode through to SubunitTranscriber.
+        try:
+            from ..transcriber.base import clear_cache as _clear
+            _clear()
+        except Exception:
+            pass
+        self._refresh_detail_card()
 
     def _popup_local_model_menu(self, anchor: QPushButton) -> None:
         menu = QMenu(self)
@@ -672,8 +799,11 @@ class MainWindow(QMainWindow):
     def _make_stat_card(self, title: str, value: str) -> QFrame:
         card = self._make_card()
         l = QVBoxLayout(card)
-        l.setContentsMargins(18, 16, 18, 16)
-        l.setSpacing(4)
+        # 2026-05-16: roomier padding so the values don't kiss the edges
+        # in the bigger main window. Cards are equal-weight in the stats
+        # row — give them visual breathing space.
+        l.setContentsMargins(22, 20, 22, 20)
+        l.setSpacing(6)
         t = QLabel(title)
         t.setObjectName("h2")
         v = QLabel(value)

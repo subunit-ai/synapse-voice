@@ -114,3 +114,116 @@ def send_verification_code(email: str, code: str) -> None:
         # reason (e.g. unverified domain, bad recipient) — useful for ops.
         logger.warning("resend rejected %s: %s %s", email, r.status_code, r.text[:200])
         raise EmailDeliveryError(f"resend rejected ({r.status_code})")
+
+
+def send_meeting_recap(
+    *,
+    to_email: str,
+    recipient_name: str,
+    host_name: str,
+    meeting_title: str,
+    code: str,
+    transcript_markdown: str,
+    summary_text: str | None = None,
+    recap_token: str | None = None,
+) -> None:
+    """Per-participant magic-link recap email after the meeting ends.
+
+    Lightweight: text-first, transcript inline (truncated), one CTA back to
+    meet.subunit.ai/<code> where the full protocol lives. The CTA URL uses
+    the participant's existing join token so they don't have to re-enter
+    anything — same token they got at check-in.
+    """
+    if not RESEND_API_KEY:
+        raise EmailDeliveryError("RESEND_API_KEY is not configured on the server")
+
+    safe_title = (meeting_title or f"Meeting #{code}").strip()
+    subject = f"Sonar Recap — {safe_title}"
+
+    body_text = (
+        f"Hi {recipient_name},\n\n"
+        f"hier ist das Protokoll von „{safe_title}“ mit {host_name}:\n\n"
+    )
+    if summary_text:
+        body_text += summary_text.strip() + "\n\n— — —\n\n"
+    body_text += transcript_markdown.strip() + "\n\n"
+    recap_url = (
+        f"https://meet.subunit.ai/{code}?t={recap_token}"
+        if recap_token else
+        f"https://meet.subunit.ai/{code}"
+    )
+    body_text += (
+        f"Volltext + Tasks/Decisions: {recap_url}\n\n"
+        f"Wir loeschen dein Audio in 24h automatisch (DSGVO).\n\n"
+        f"— Sonar by Subunit | https://subunit.ai/sonar/"
+    )
+
+    transcript_html = (
+        transcript_markdown
+        .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        .replace("\n", "<br>")
+    )
+    summary_html = ""
+    if summary_text:
+        esc = summary_text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br>")
+        summary_html = f"""
+          <div style="background:#f0f9ff;border-left:3px solid #06b6d4;padding:14px 16px;
+                      border-radius:8px;margin:0 0 22px 0;font-size:14px;line-height:1.55;
+                      color:#0f172a;">{esc}</div>
+        """
+
+    html = f"""
+        <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;
+                    background:#f6f8fa;padding:32px 16px;color:#0f172a;">
+          <div style="max-width:640px;margin:0 auto;background:#fff;border-radius:18px;
+                      padding:32px 28px;box-shadow:0 8px 32px rgba(15,23,42,0.06);">
+            <div style="font-size:13px;letter-spacing:0.16em;text-transform:uppercase;
+                        color:#06b6d4;font-weight:700;">Sonar Recap</div>
+            <h1 style="margin:8px 0 6px 0;font-size:24px;line-height:1.3;font-weight:800;
+                       color:#0f172a;">{safe_title}</h1>
+            <p style="margin:0 0 22px 0;font-size:14px;color:#64748b;">
+              Hi {recipient_name}, hier ist das Protokoll mit <strong>{host_name}</strong>.
+            </p>
+            {summary_html}
+            <div style="font-size:14px;line-height:1.6;color:#334155;
+                        background:#f8fafc;padding:18px 20px;border-radius:12px;
+                        max-height:520px;overflow:auto;">
+              {transcript_html}
+            </div>
+            <div style="margin:24px 0 8px 0;">
+              <a href="{recap_url}"
+                 style="display:inline-block;padding:12px 22px;border-radius:10px;
+                        background:#06b6d4;color:#fff;text-decoration:none;font-weight:700;
+                        font-size:14px;letter-spacing:0.02em;">
+                Volltext + Tasks ansehen
+              </a>
+            </div>
+            <p style="margin:22px 0 0 0;font-size:12px;color:#94a3b8;line-height:1.5;">
+              DSGVO: Dein Audio wird in 24h automatisch geloescht. —
+              <a href="https://subunit.ai/sonar/" style="color:#06b6d4;text-decoration:none;">
+                subunit.ai/sonar
+              </a>
+            </p>
+          </div>
+        </div>
+    """.strip()
+
+    payload = {
+        "from": RESEND_FROM,
+        "to": [to_email],
+        "subject": subject,
+        "text": body_text,
+        "html": html,
+    }
+    headers = {
+        "Authorization": f"Bearer {RESEND_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    try:
+        r = requests.post(RESEND_ENDPOINT, json=payload, headers=headers, timeout=15)
+    except requests.RequestException as e:
+        logger.warning("recap resend network error %s: %s", to_email, e)
+        raise EmailDeliveryError(f"network error: {e}") from e
+    if r.status_code >= 400:
+        logger.warning("recap resend rejected %s: %s %s", to_email, r.status_code, r.text[:200])
+        raise EmailDeliveryError(f"resend rejected ({r.status_code})")
