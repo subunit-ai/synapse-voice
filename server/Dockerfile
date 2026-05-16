@@ -33,10 +33,11 @@ ARG WHISPER_MODEL=large-v3-turbo
 ENV WHISPER_MODEL=${WHISPER_MODEL}
 RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('${WHISPER_MODEL}', device='cpu', compute_type='int8')"
 
-# 2026-05-16: Fast-mode model (distil-large-v3) — Sonar "Fast" switch
-# routes here for instant-paste feel. Pre-downloaded so first /v1/transcribe
-# call with quality_mode=fast doesn't pay the ~1GB fetch cost at runtime.
-ARG WHISPER_FAST_MODEL=distil-large-v3
+# 2026-05-16: Fast-mode model — multilingual Whisper `small`.
+# `small` runs ~4x faster than large-v3-turbo on Pascal GPUs while
+# keeping German + Umlaute reliable. Earlier picks: distil-large-v3
+# (rejected: English-only) and medium (rejected: not snappy enough).
+ARG WHISPER_FAST_MODEL=small
 ENV WHISPER_FAST_MODEL=${WHISPER_FAST_MODEL}
 RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('${WHISPER_FAST_MODEL}', device='cpu', compute_type='int8')"
 

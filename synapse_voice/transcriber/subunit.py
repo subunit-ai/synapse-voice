@@ -38,10 +38,10 @@ class SubunitTranscriber:
         # legacy X-API-Key. The transcribe-server will accept either
         # during the migration window.
         self.bearer_token = bearer_token
-        # 2026-05-16: "quality" → large-v3-turbo, "fast" → distil-large-v3.
-        # Sent as a form field; server falls back to its default if it
-        # doesn't recognise the value (older transcribe-server builds).
-        self.quality_mode = (quality_mode or "quality").lower()
+        # 2026-05-16: "auto" / "quality" / "fast". Sent as a form field;
+        # server falls back to its default if it doesn't recognise the
+        # value (older transcribe-server builds).
+        self.quality_mode = (quality_mode or "auto").lower()
         # Set by base.get_transcriber() from the user's vocab list. Mirrors
         # the cloud + local providers so Whisper biases toward custom names
         # / jargon on the Subunit backend too.

@@ -648,7 +648,13 @@ class MainWindow(QMainWindow):
         self._detail_layout.addWidget(chip, 0, Qt.AlignmentFlag.AlignVCenter)
 
     def _build_quality_toggle(self) -> QVBoxLayout:
-        """Two-pill segmented control: QUALITY | FAST."""
+        """Three-pill segmented control: AUTO | QUALITY | FAST.
+
+        v0.9.7: added Auto. Server-side picks Fast (small) for clips
+        under ~8s and Quality (large-v3-turbo) for longer dictations.
+        Auto is the new default since it gives instant feel on
+        one-liners without sacrificing accuracy on meetings.
+        """
         from PyQt6.QtWidgets import QButtonGroup
 
         col = QVBoxLayout()
@@ -661,14 +667,14 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         row.setSpacing(0)
 
-        current = (getattr(self.config, "cloud_quality_mode", "quality") or "quality").lower()
+        current = (getattr(self.config, "cloud_quality_mode", "auto") or "auto").lower()
         group = QButtonGroup(self)
         group.setExclusive(True)
-        for value, label in (("quality", "QUALITY"), ("fast", "FAST")):
+        for value, label in (("auto", "AUTO"), ("quality", "QUALITY"), ("fast", "FAST")):
             b = QPushButton(label)
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setMinimumWidth(82)
+            b.setMinimumWidth(70)
             b.setObjectName("qualityPillActive" if value == current else "qualityPill")
             b.setProperty("modeValue", value)
             if value == current:
@@ -680,7 +686,7 @@ class MainWindow(QMainWindow):
         return col
 
     def _on_quality_mode_changed(self, value: str) -> None:
-        if value not in ("quality", "fast"):
+        if value not in ("auto", "quality", "fast"):
             return
         if getattr(self.config, "cloud_quality_mode", "quality") == value:
             return

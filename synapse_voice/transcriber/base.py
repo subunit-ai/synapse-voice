@@ -124,7 +124,7 @@ def _cache_key(mode: str, config) -> tuple:
             config.subunit_endpoint,
             getattr(config, "subunit_api_key", ""),
             getattr(config, "subunit_access_token", ""),
-            getattr(config, "cloud_quality_mode", "quality"),
+            getattr(config, "cloud_quality_mode", "auto"),
         )
     if mode == "openai":
         return (mode, config.openai_api_key, config.openai_model)
@@ -213,7 +213,7 @@ def get_transcriber(mode: str, config) -> Transcriber:
             endpoint=config.subunit_endpoint,
             api_key=getattr(config, "subunit_api_key", ""),
             bearer_token=getattr(config, "subunit_access_token", ""),
-            quality_mode=getattr(config, "cloud_quality_mode", "quality"),
+            quality_mode=getattr(config, "cloud_quality_mode", "auto"),
         )
         inst.initial_prompt = _vocab_prompt(config)
     elif mode == "openai":

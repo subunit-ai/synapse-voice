@@ -165,11 +165,12 @@ class Config:
     subunit_token_expires_in: int = 0     # seconds since issued_at
     subunit_workspace_id: str = ""
 
-    # 2026-05-16: Cloud-side Quality vs Fast switch (Subunit provider).
-    # "quality" → large-v3-turbo (current default, best accuracy).
-    # "fast" → distil-large-v3 (~3-6× faster, instant-paste feel).
+    # 2026-05-16: Cloud-side Quality vs Fast vs Auto switch (Subunit provider).
+    # "auto"    → server picks Fast for <8s clips, Quality for longer (default)
+    # "quality" → large-v3-turbo (best accuracy, slower)
+    # "fast"    → small (~4× faster, instant-paste feel on short clips)
     # Persisted across launches; surfaced in the main-window detail card.
-    cloud_quality_mode: str = "quality"  # "quality" | "fast"
+    cloud_quality_mode: str = "auto"  # "auto" | "quality" | "fast"
 
     # v0.4: Subtle UI sounds — start ping on record, pop on done.
     sound_enabled: bool = True

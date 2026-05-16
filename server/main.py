@@ -39,9 +39,15 @@ import email_send as _email_send
 
 MODEL_NAME = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
 # 2026-05-16: Quality vs Fast modes. Quality = the default MODEL_NAME
-# (large-v3-turbo). Fast = distil-large-v3 for instant-paste feel on
-# Sonar hotkey-release. Both are loaded lazily, then kept in memory.
-FAST_MODEL_NAME = os.environ.get("WHISPER_FAST_MODEL", "distil-large-v3")
+# (large-v3-turbo). Fast = `small` for true instant-paste feel on Sonar
+# hotkey-release. Multilingual (German + Umlaute work), ~4x faster than
+# large-v3-turbo on the 1070 Ti.
+FAST_MODEL_NAME = os.environ.get("WHISPER_FAST_MODEL", "small")
+# 2026-05-16: When the client sends `quality_mode=auto` we pick Fast
+# for clips shorter than this threshold (instant feel for one-liner
+# dictations) and Quality for everything longer (don't sacrifice
+# accuracy on meetings/long-form). Tuneable via env.
+AUTO_SHORT_THRESHOLD_S = float(os.environ.get("WHISPER_AUTO_THRESHOLD_S", "8.0"))
 DEVICE = os.environ.get("WHISPER_DEVICE", "auto")  # auto | cpu | cuda
 COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE", "auto")  # auto | float16 | int8
 API_KEY = os.environ.get("TRANSCRIBE_API_KEY", "")
@@ -359,18 +365,31 @@ async def transcribe(
     initial_prompt = (prompt or "").strip()[:1024] or None
 
     t0 = time.time()
-    # 2026-05-16: quality_mode picks between large-v3-turbo (quality,
-    # default) and distil-large-v3 (fast). Distil is ~3-6x faster on
-    # short-form dictation with negligible accuracy loss.
-    model = _model_for(quality_mode)
-    used_model = FAST_MODEL_NAME if (quality_mode or "").strip().lower() == "fast" else MODEL_NAME
+    # 2026-05-16: quality_mode picks between models.
+    #   quality → large-v3-turbo (multilingual, best accuracy)
+    #   fast    → small (multilingual, ~4x faster, instant-paste feel)
+    #   auto    → fast for clips < AUTO_SHORT_THRESHOLD_S, else quality.
+    #             Lets the server pick the right model based on length
+    #             so short one-liners feel instant and long dictations
+    #             keep their accuracy without the user toggling.
+    mode_raw = (quality_mode or "quality").strip().lower()
+    # Audio is decoded at 16kHz by _decode_audio — that's Whisper's expected rate.
+    audio_duration_s = float(audio.size) / 16000.0 if audio.size else 0.0
+    if mode_raw == "auto":
+        effective_mode = "fast" if audio_duration_s < AUTO_SHORT_THRESHOLD_S else "quality"
+    elif mode_raw == "fast":
+        effective_mode = "fast"
+    else:
+        effective_mode = "quality"
+    model = _model_for(effective_mode)
+    used_model = FAST_MODEL_NAME if effective_mode == "fast" else MODEL_NAME
     # v0.6.0: "auto" or empty language → let faster-whisper detect
     # the language per utterance.  Useful for mixed-language meetings.
     lang_arg = None if language in ("", "auto", None) else language
     # Fast mode trades beam_size=1 for latency — beam_size=5 is the
-    # quality default. Together with the smaller distil model this is
-    # what gets us the "instant paste" feel TJ asked for.
-    is_fast = (quality_mode or "").strip().lower() == "fast"
+    # quality default. Together with the smaller model this is what
+    # gets us the "instant paste" feel TJ asked for.
+    is_fast = effective_mode == "fast"
     segments_iter, info = model.transcribe(
         audio,
         language=lang_arg,
@@ -406,7 +425,10 @@ async def transcribe(
         "duration_s": info.duration,
         "elapsed_s": round(elapsed, 3),
         "model": used_model,
-        "quality_mode": "fast" if is_fast else "quality",
+        # Effective mode after auto-routing — clients showing a Quality/Fast
+        # badge can reflect what actually ran instead of what they asked for.
+        "quality_mode": effective_mode,
+        "quality_mode_requested": mode_raw,
     }
     if with_segments:
         response["segments"] = materialised
