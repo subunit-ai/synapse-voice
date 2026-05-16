@@ -253,6 +253,8 @@ class OrbOverlay(QWidget):
             self._paint_pill(p, cx, cy, accent, accent_deep, lit, is_active)
         elif style == "constellation":
             self._paint_constellation(p, cx, cy, accent, accent_deep, lit, is_active)
+        elif style == "pulse-wave":
+            self._paint_pulse_wave(p, cx, cy, accent, accent_deep, lit, is_active)
         else:
             self._paint_sphere(p, cx, cy, accent, accent_deep, lit, is_active)
 
@@ -697,6 +699,60 @@ class OrbOverlay(QWidget):
                 dot_col.setAlpha(min(255, (170 if ri == 0 else 130) + int(85 * lit)))
                 p.setBrush(dot_col)
                 p.drawEllipse(dx - size, dy - size, size * 2, size * 2)
+
+    # ------------------------------------------------------------------
+    # Renderer: pulse-wave (v0.9.7 — horizontal sine, mic-reactive amplitude)
+    # ------------------------------------------------------------------
+    def _paint_pulse_wave(
+        self,
+        p: QPainter,
+        cx: int,
+        cy: int,
+        accent: QColor,
+        accent_deep: QColor,
+        lit: float,
+        is_active: bool,
+    ) -> None:
+        """Horizontal sine wave centered on the orb. Amplitude scales
+        with mic level — flat-line when idle, dramatic peaks during
+        recording. Phase rolls so the wave appears to scroll right →
+        left like a heart-rate monitor."""
+        span = int(self.DOT_RADIUS * 3.4)
+        amp_base = self.DOT_RADIUS * 0.7
+        level = self._level_smooth
+        # Active: amplitude rides mic level. Idle: tiny breath ripple.
+        amp = amp_base * (
+            (0.40 + level * 1.8) if is_active else (0.10 + 0.06 * math.sin(self._pulse_phase * 1.2))
+        )
+        amp *= 0.55 + 0.45 * lit  # dim when not lit
+        # Higher mic level → tighter wavelength (denser peaks) → more "alive"
+        freq = 2.0 + level * 2.5
+
+        path = QPainterPath()
+        steps = 80
+        for i in range(steps + 1):
+            t = i / steps
+            x = cx - span // 2 + int(t * span)
+            phase = self._pulse_phase * 2.2 + t * 6.28 * freq
+            y = cy + int(amp * math.sin(phase))
+            if i == 0:
+                path.moveTo(x, y)
+            else:
+                path.lineTo(x, y)
+
+        # Glow underlay
+        if lit > 0.3 and is_active:
+            glow = QColor(accent)
+            glow.setAlpha(60)
+            p.setPen(QPen(glow, 5.0))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPath(path)
+        # Main line
+        col = QColor(accent if is_active or lit > 0.4 else _DIM_DOT)
+        col.setAlpha(min(255, 140 + int(115 * lit)))
+        p.setPen(QPen(col, 2.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
 
     def _draw_satellites(
         self, p: QPainter, cx: int, cy: int, accent: QColor

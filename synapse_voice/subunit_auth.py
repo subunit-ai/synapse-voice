@@ -48,9 +48,14 @@ from .logger import get as _get_logger
 LOG = _get_logger(__name__)
 
 AUTH_BASE_URL = "https://auth.subunit.ai"
-# 5-minute timeout — that's long enough to read an email-verification code
-# but short enough that an abandoned login attempt cleans itself up.
-LOGIN_TIMEOUT_SECONDS = 300
+# 30-minute timeout. The earlier 5-minute cap bit Erik on 2026-05-16:
+# the verification-code email took longer than 5min to arrive, the
+# local listener was already dead, and the browser's bounce-to-
+# localhost found nothing → Erik had to log in manually after signup.
+# 30min covers slow email delivery without leaving a half-open socket
+# around forever — the listener still shuts down on success or on
+# explicit cancel.
+LOGIN_TIMEOUT_SECONDS = 1800
 
 
 @dataclass(frozen=True)

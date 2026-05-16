@@ -939,11 +939,12 @@ class SettingsDialog(QDialog):
         layout.addSpacing(6)
         layout.addWidget(_section_title("Style"))
         self.orb_style_combo = QComboBox()
-        # v0.9.6: 3 new styles up top (TJ-pick list), legacy below.
+        # v0.9.6 / v0.9.7: 5 new styles up top (TJ-pick list), legacy below.
         self.orb_style_combo.addItem("Sonar Ping — mic-reactive expanding rings ⭐", "ping")
         self.orb_style_combo.addItem("Status Pill — compact label + state dot", "pill")
         self.orb_style_combo.addItem("Constellation — orbiting nodes (rotating)", "constellation")
         self.orb_style_combo.addItem("Bars — vertical audio equalizer", "bars")
+        self.orb_style_combo.addItem("Pulse Wave — horizontal sine, mic-reactive", "pulse-wave")
         self.orb_style_combo.addItem("Sphere — glass dot (legacy default)", "sphere")
         self.orb_style_combo.addItem("Sonar — animated logo (rings + bars, legacy)", "sonar")
         self.orb_style_combo.addItem("Wave — horizontal sine", "wave")
@@ -1039,49 +1040,70 @@ class SettingsDialog(QDialog):
         layout.addSpacing(6)
         layout.addWidget(_hint(
             "Öffnet auth.subunit.ai im Browser — du loggst dich dort mit "
-            "deinem Subunit-Konto ein (oder erstellst eines), Sonar bekommt "
-            "danach automatisch einen Token. Dein Passwort bleibt im Browser.\n\n"
-            "Diese Authentifizierung ist DSGVO-konform und ersetzt mittelfristig "
-            "die API-Key-Methode unten."
+            "deinem Subunit-Konto ein (oder erstellst eines, optional via "
+            "Google), Sonar bekommt danach automatisch einen Token. Dein "
+            "Passwort bleibt im Browser.\n\n"
+            "DSGVO-konform, EU-gehostet."
         ))
+
+        # 2026-05-16 (v0.9.7, TJ-feedback): inline Profile card showing
+        # plan + access + workspace. Fetched live from /v1/account/info
+        # via the Subunit Bearer token. Surfaces the answer to "habe ich
+        # Pro oder nicht?" without TJ having to ping the admin panel.
+        layout.addSpacing(14)
+        self.profile_card = QFrame()
+        self.profile_card.setObjectName("card")
+        self.profile_card.setStyleSheet(
+            f"QFrame#card {{ background: {NIGHT_2}; "
+            f"border: 1px solid {NIGHT_BORDER}; border-radius: 10px; }}"
+        )
+        pc = QVBoxLayout(self.profile_card)
+        pc.setContentsMargins(16, 14, 16, 14)
+        pc.setSpacing(8)
+
+        row_email = QHBoxLayout()
+        row_email.setSpacing(8)
+        lbl_email_key = QLabel("Email")
+        lbl_email_key.setStyleSheet(f"color: {WHITE_DIM}; font-size: 11px; letter-spacing: 0.1em;")
+        row_email.addWidget(lbl_email_key)
+        row_email.addStretch(1)
+        self.profile_email_val = QLabel("—")
+        self.profile_email_val.setStyleSheet(f"color: {WHITE}; font-weight: 600;")
+        row_email.addWidget(self.profile_email_val)
+        pc.addLayout(row_email)
+
+        row_plan = QHBoxLayout()
+        row_plan.setSpacing(8)
+        lbl_plan_key = QLabel("Plan")
+        lbl_plan_key.setStyleSheet(f"color: {WHITE_DIM}; font-size: 11px; letter-spacing: 0.1em;")
+        row_plan.addWidget(lbl_plan_key)
+        row_plan.addStretch(1)
+        self.profile_plan_badge = QLabel("—")
+        self.profile_plan_badge.setStyleSheet(
+            "color: #050b1a; background: #475569; font-weight: 700; "
+            "padding: 2px 10px; border-radius: 999px; font-size: 11px; letter-spacing: 0.1em;"
+        )
+        row_plan.addWidget(self.profile_plan_badge)
+        pc.addLayout(row_plan)
+
+        row_access = QHBoxLayout()
+        row_access.setSpacing(8)
+        lbl_access_key = QLabel("Cloud-Transkription")
+        lbl_access_key.setStyleSheet(f"color: {WHITE_DIM}; font-size: 11px; letter-spacing: 0.1em;")
+        row_access.addWidget(lbl_access_key)
+        row_access.addStretch(1)
+        self.profile_access_val = QLabel("—")
+        self.profile_access_val.setStyleSheet(f"color: {WHITE_DIM};")
+        row_access.addWidget(self.profile_access_val)
+        pc.addLayout(row_access)
+
+        layout.addWidget(self.profile_card)
 
         # Update the status line + button states from current config.
         self._refresh_subunit_login_status()
-
-        layout.addSpacing(14)
-        layout.addWidget(_section_title("Legacy: API-Key (wird ausgemustert)"))
-
-        self.account_status_lbl = QLabel("")
-        self.account_status_lbl.setWordWrap(True)
-        layout.addWidget(self.account_status_lbl)
-
-        layout.addSpacing(6)
-        form = QFormLayout()
-        form.setSpacing(10)
-        self.account_email_edit = QLineEdit(self.config.account_email)
-        self.account_email_edit.setPlaceholderText("you@example.com")
-        form.addRow("Email", self.account_email_edit)
-        layout.addLayout(form)
-
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
-        self.account_signin_btn = QPushButton("Get my Subunit key")
-        self.account_signin_btn.clicked.connect(self._on_account_signin)
-        btn_row.addWidget(self.account_signin_btn)
-
-        self.account_logout_btn = QPushButton("Sign out")
-        self.account_logout_btn.clicked.connect(self._on_account_logout)
-        btn_row.addWidget(self.account_logout_btn)
-        btn_row.addStretch(1)
-        layout.addLayout(btn_row)
-
-        layout.addSpacing(8)
-        layout.addWidget(_hint(
-            "Legacy: nur wenn du dich noch nicht mit dem Subunit-Account "
-            "anmelden willst. Email + Button erstellt automatisch einen "
-            "API-Key für dich. Same email = same key, also re-install "
-            "funktioniert."
-        ))
+        # Kick off the live profile fetch in the background — the
+        # network round-trip shouldn't block opening Settings.
+        self._refresh_profile_card()
 
         # v0.3.29 — Subunit Suite: Voice → Synapse Knowledge Base bridge
         layout.addSpacing(12)
@@ -1166,7 +1188,6 @@ class SettingsDialog(QDialog):
         layout.addWidget(privacy_box)
 
         layout.addStretch(1)
-        self._refresh_account_status()
         return page
 
     def _on_open_config_dir(self) -> None:
@@ -1281,6 +1302,96 @@ class SettingsDialog(QDialog):
 
     # ── Subunit-Account browser-login flow (v0.9.5) ─────────────────────
 
+    def _refresh_profile_card(self) -> None:
+        """Populate the inline Profile card with live data from the
+        transcribe-server /v1/account/info endpoint. Runs the network
+        call on a background thread so Settings stays responsive even
+        if the server is slow / offline."""
+        import threading
+        from PyQt6.QtCore import QTimer
+
+        # Default while we wait / on failure
+        access = (getattr(self.config, "subunit_access_token", "") or "").strip()
+        api_key = (getattr(self.config, "subunit_api_key", "") or "").strip()
+        if not access and not api_key:
+            self.profile_email_val.setText("Nicht angemeldet")
+            self.profile_plan_badge.setText("—")
+            self.profile_plan_badge.setStyleSheet(
+                "color: #050b1a; background: #475569; font-weight: 700; "
+                "padding: 2px 10px; border-radius: 999px; font-size: 11px; letter-spacing: 0.1em;"
+            )
+            self.profile_access_val.setText("—")
+            return
+
+        self.profile_email_val.setText("Wird geladen …")
+        self.profile_access_val.setText("…")
+
+        result_box: list = []
+
+        def fetch() -> None:
+            import urllib.error, urllib.request, json as _json
+            endpoint = (getattr(self.config, "subunit_endpoint", "") or "https://transcribe.subunit.ai").rstrip("/")
+            url = endpoint + "/v1/account/info"
+            headers = {}
+            if access:
+                headers["Authorization"] = "Bearer " + access
+            elif api_key:
+                headers["X-API-Key"] = api_key
+            try:
+                req = urllib.request.Request(url, method="GET", headers=headers)
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    result_box.append(_json.loads(resp.read().decode("utf-8")))
+            except urllib.error.HTTPError as exc:
+                try:
+                    body = _json.loads(exc.read().decode("utf-8"))
+                except Exception:
+                    body = {"detail": str(exc)}
+                result_box.append({"_error": True, "status": exc.code, "body": body})
+            except Exception as exc:
+                result_box.append({"_error": True, "message": str(exc)})
+
+        threading.Thread(target=fetch, name="sonar-profile-fetch", daemon=True).start()
+
+        def check() -> None:
+            if not result_box:
+                QTimer.singleShot(250, check)
+                return
+            r = result_box[0]
+            if r.get("_error"):
+                self.profile_email_val.setText("Fehler beim Laden")
+                self.profile_plan_badge.setText("?")
+                self.profile_access_val.setText("Server nicht erreichbar")
+                return
+            email = (r.get("email") or "").strip() or "—"
+            plan = (r.get("plan") or "free").lower()
+            has_access = bool(r.get("has_access"))
+            self.profile_email_val.setText(email)
+            # Plan badge styling per tier
+            plan_styles = {
+                "operator":   ("OPERATOR",   "#c084fc"),
+                "ops":        ("OPS",        "#c084fc"),
+                "enterprise": ("ENTERPRISE", "#a855f7"),
+                "pro":        ("PRO",        "#06b6d4"),
+                "pilot":      ("PILOT",      "#f59e0b"),
+                "basic":      ("BASIC",      "#64748b"),
+                "trial":      ("TRIAL",      "#f59e0b"),
+                "free":       ("FREE",       "#475569"),
+            }
+            label, bg = plan_styles.get(plan, (plan.upper(), "#475569"))
+            self.profile_plan_badge.setText(label)
+            self.profile_plan_badge.setStyleSheet(
+                f"color: #050b1a; background: {bg}; font-weight: 700; "
+                "padding: 2px 10px; border-radius: 999px; font-size: 11px; letter-spacing: 0.1em;"
+            )
+            if has_access:
+                self.profile_access_val.setText("✓ Aktiv")
+                self.profile_access_val.setStyleSheet("color: #10b981;")
+            else:
+                self.profile_access_val.setText("✗ Upgrade nötig")
+                self.profile_access_val.setStyleSheet("color: #ef4444;")
+
+        QTimer.singleShot(250, check)
+
     def _refresh_subunit_login_status(self) -> None:
         """Sync the status label + button states with the current config."""
         access = (self.config.subunit_access_token or "").strip()
@@ -1298,6 +1409,7 @@ class SettingsDialog(QDialog):
             )
             self.subunit_login_btn.setText("Mit Subunit-Account anmelden")
             self.subunit_logout_btn.setEnabled(False)
+        self._refresh_profile_card()
 
     def _on_subunit_login(self) -> None:
         """Kick off the browser-based login flow on a background thread.
@@ -1365,6 +1477,7 @@ class SettingsDialog(QDialog):
 
             self.subunit_login_btn.setEnabled(True)
             self._refresh_subunit_login_status()
+            self._refresh_profile_card()
             QMessageBox.information(
                 self, "Sonar — Login",
                 "Erfolgreich angemeldet. Cloud-Transkription nutzt jetzt deinen Subunit-Account.",
