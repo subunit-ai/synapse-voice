@@ -258,6 +258,15 @@ class TranscribeWorker(QObject):
         is never blocked by storage problems.
         """
         try:
+            # v0.9.13 (Codex P1): respect the privacy toggle. Settings
+            # promises "keine Transkripte werden auf diesem Gerät
+            # gespeichert" — Meetings persistence was bypassing that.
+            if not bool(getattr(self._config, "history_enabled", True)):
+                _log.info(
+                    "Skipping meeting persist: history_enabled=False (%.1fs)",
+                    duration_s,
+                )
+                return
             threshold = max(0, getattr(self._config, "long_form_threshold_seconds", 60) or 0)
             if threshold <= 0 or duration_s < threshold:
                 return
@@ -438,6 +447,12 @@ class SynapseVoiceApp(QObject):
         # _check_for_updates). Profile-card UI reads this to decide
         # whether to show "Update verfügbar" pill + install button.
         self._available_update = None
+        # v0.9.13 (Codex P1): track whether the LAST tray balloon shown
+        # was the update toast. Without this guard, _on_tray_balloon_clicked
+        # opens the installer dialog for ANY balloon click while an
+        # update is cached — including the "paste ready" / status
+        # toasts the user is just trying to dismiss.
+        self._last_tray_balloon_was_update = False
         if self.config.use_orb_overlay:
             self.orb = OrbOverlay(self.config, on_change_mode=self.change_mode)
             self.orb.set_level_provider(lambda: self.recorder.level)
@@ -695,6 +710,9 @@ class SynapseVoiceApp(QObject):
                     "Text steht in der Zwischenablage. Strg+V drücken um manuell einzufügen.",
                     msecs=3500,
                 )
+                # v0.9.13 (Codex P1): superseding any pending update toast
+                # so clicking this balloon doesn't trigger the installer.
+                self._last_tray_balloon_was_update = False
             except Exception:
                 pass
         else:
@@ -714,6 +732,8 @@ class SynapseVoiceApp(QObject):
                     "Zwischenablage nicht erreichbar. Settings → Profil → Diagnose kopieren für Debug.",
                     msecs=5000,
                 )
+                # v0.9.13 (Codex P1): see note in the clipboard-success branch.
+                self._last_tray_balloon_was_update = False
             except Exception:
                 pass
         QTimer.singleShot(2500, lambda: (self.tray.set_state("idle", "idle"), self._safe_status("idle")))
@@ -830,6 +850,9 @@ class SynapseVoiceApp(QObject):
         self._safe_status("error", color="#ffc450")
         self.bubble.show_state("error", f"⚠ {message[:60]}", auto_hide_ms=5000)
         self.tray.showMessage("Sonar — error", message, msecs=4000)
+        # v0.9.13 (Codex P1): supersede the update-toast click handler so
+        # this error balloon doesn't trigger the installer dialog.
+        self._last_tray_balloon_was_update = False
         QTimer.singleShot(3000, lambda: (self.tray.set_state("idle", "idle"), self._safe_status("idle")))
 
     def _record_history(
@@ -1095,6 +1118,14 @@ class SynapseVoiceApp(QObject):
                 f"v{info.current} → {info.latest}. Klick zum Installieren oder über Settings.",
                 msecs=6000,
             )
+            # v0.9.13: arm the balloon-click handler. Auto-disarmed
+            # after the toast duration so a click on any later toast
+            # doesn't open the installer; also consumed on the first
+            # actual click. Any OTHER showMessage call within those 7s
+            # is also assumed to supersede the update toast — so we
+            # disarm in _on_transcribe_done / _show_error explicitly.
+            self._last_tray_balloon_was_update = True
+            QTimer.singleShot(7000, self._clear_update_balloon_flag)
         except Exception:
             pass
 
@@ -1103,12 +1134,25 @@ class SynapseVoiceApp(QObject):
             self._prompt_update_install(info)
 
     def _on_tray_balloon_clicked(self) -> None:
-        """Tray balloon click handler. Opens the install prompt when an
-        update is pending; otherwise raises the main window."""
-        if self._available_update is not None:
+        """Tray balloon click handler. Opens the install prompt only
+        when the LAST balloon shown was the update-available toast;
+        otherwise raises the main window. v0.9.13 (Codex P1): without
+        this guard, clicking a "paste ready" or "error" toast would
+        open the installer dialog as long as `_available_update` was
+        cached from an earlier check."""
+        was_update = self._last_tray_balloon_was_update
+        # One-shot — consume the flag on click so a follow-up generic
+        # toast click doesn't reuse it.
+        self._last_tray_balloon_was_update = False
+        if was_update and self._available_update is not None:
             self._prompt_update_install(self._available_update)
         else:
             self.open_window()
+
+    def _clear_update_balloon_flag(self) -> None:
+        """Auto-disarm helper for the update-toast click handler.
+        Scheduled by _check_for_updates 7s after the balloon fires."""
+        self._last_tray_balloon_was_update = False
 
     def _prompt_update_install(self, info) -> None:
         """Full Yes/No install dialog. Spawned from tray-click or from

@@ -144,6 +144,40 @@ def _hint(text: str) -> QLabel:
     return lbl
 
 
+# v0.9.13 (Codex P1): redaction helpers for the diagnostics dump. Log
+# files often contain headers / URLs with tokens, transcribed text, and
+# auth-error bodies — and the diagnostics block is explicitly meant to
+# be shareable with support. Each pattern matches a known-sensitive
+# format and replaces it with a length-preserving placeholder so the
+# user can still see WHERE in the log the redaction happened (useful
+# when debugging "why is my API call failing").
+import re as _re_redact
+
+_REDACT_PATTERNS = (
+    # Authorization: Bearer eyJ...  /  Authorization: Token xxx
+    (_re_redact.compile(r"(?i)(authorization\s*:\s*)(\S+)"),                 r"\1[REDACTED-AUTH]"),
+    # X-API-Key: deadbeef
+    (_re_redact.compile(r"(?i)(x-api-key\s*:\s*)(\S+)"),                     r"\1[REDACTED-KEY]"),
+    # access_token / refresh_token / api_key in URLs or JSON
+    (_re_redact.compile(r"(?i)\"(access_token|refresh_token|api_key|password|secret|token)\"\s*:\s*\"[^\"]*\""),
+                                                                              r'"\1": "[REDACTED]"'),
+    (_re_redact.compile(r"(?i)(access_token|refresh_token|api_key|token|secret)=([^\s&]+)"),
+                                                                              r"\1=[REDACTED]"),
+    # JWTs anywhere (eyJ... 3-part base64url with dots)
+    (_re_redact.compile(r"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+"),
+                                                                              "[REDACTED-JWT]"),
+    # email addresses — not strictly secrets but commonly identifying
+    (_re_redact.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"),
+                                                                              "[REDACTED-EMAIL]"),
+)
+
+
+def _redact_log_line(line: str) -> str:
+    for pat, repl in _REDACT_PATTERNS:
+        line = pat.sub(repl, line)
+    return line
+
+
 class _ToggleRow(QWidget):
     """Label + animated toggle in a horizontal row.
 
@@ -1465,16 +1499,21 @@ class SettingsDialog(QDialog):
         lines.append(f"Email displayed: {self.profile_email_val.text()}")
         lines.append(f"Plan badge: {self.profile_plan_badge.text()}")
         lines.append(f"Access: {self.profile_access_val.text()}")
-        # Tail of the log file if accessible
+        # Tail of the log file if accessible. v0.9.13 (Codex P1): each
+        # log line is redacted before it's pasted, since log files often
+        # contain transcribed text, request headers, URLs with tokens,
+        # and auth error bodies. The diagnostic dump is explicitly meant
+        # to be shareable with support — leaking those would defeat the
+        # whole "redacted config" block above it.
         try:
             from ..logger import log_file_path
             p = log_file_path()
             if p and p.exists():
                 lines.append("")
-                lines.append(f"--- Log tail ({p.name}, last 30 lines) ---")
+                lines.append(f"--- Log tail ({p.name}, last 30 lines, redacted) ---")
                 with open(p, "r", encoding="utf-8", errors="replace") as f:
                     tail = f.readlines()[-30:]
-                lines.extend(t.rstrip() for t in tail)
+                lines.extend(_redact_log_line(t.rstrip()) for t in tail)
         except Exception as exc:
             lines.append(f"(log tail unavailable: {exc})")
 

@@ -231,14 +231,49 @@ class Config:
                 cfg.save()
             # v0.9.12: backfill new Vocabulary v2 fields on legacy entries
             # so the rest of the app can rely on category/aliases existing.
+            #
+            # v0.9.13 (Codex P1): guard against malformed entries.
+            # Before this guard, a single non-dict item in `vocabulary`
+            # (e.g. a stray string left in by a buggy migration or
+            # hand-edit) would raise TypeError, fall through to the
+            # outer except, and trigger the "corrupted config" rename
+            # path — wiping ALL settings + history. Now we silently
+            # drop malformed entries with a stderr note.
             migrated = False
+            cleaned: list[dict] = []
+            dropped = 0
             for entry in cfg.vocabulary or []:
+                if not isinstance(entry, dict):
+                    dropped += 1
+                    continue
                 if "category" not in entry:
                     entry["category"] = "Other"
                     migrated = True
                 if "aliases" not in entry:
                     entry["aliases"] = []
                     migrated = True
+                # Also normalise aliases to a list[str] — strings are
+                # iterable and a hand-edited config can easily end up
+                # with "aliases": "foo" which would later create one
+                # replacement pattern per character.
+                aliases = entry.get("aliases")
+                if not isinstance(aliases, list):
+                    entry["aliases"] = []
+                    migrated = True
+                else:
+                    norm = [a for a in aliases if isinstance(a, str) and a.strip()]
+                    if norm != aliases:
+                        entry["aliases"] = norm
+                        migrated = True
+                cleaned.append(entry)
+            if dropped:
+                import sys as _sys
+                print(
+                    f"[config] dropped {dropped} malformed vocabulary entries",
+                    file=_sys.stderr,
+                )
+                cfg.vocabulary = cleaned
+                migrated = True
             if migrated:
                 cfg.save()
             return cfg

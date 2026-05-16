@@ -103,11 +103,25 @@ def apply_vocab_replace(text: str, config) -> str:
     vocab = getattr(config, "vocabulary", None) or []
     out = text
     for entry in vocab:
+        # v0.9.13 (Codex P1): defensive — Config.load() drops malformed
+        # entries, but a programmatic mutation in the running session
+        # could still inject something weird. Treat anything non-dict
+        # as a no-op.
+        if not isinstance(entry, dict):
+            continue
         canon = (entry.get("write_as") or "").strip()
         if not canon:
             continue
         patterns = [(entry.get("sounds_like") or "").strip()]
-        patterns.extend([(a or "").strip() for a in (entry.get("aliases") or [])])
+        aliases = entry.get("aliases") or []
+        # v0.9.13: aliases MUST be a list of strings. Iterating a bare
+        # string here would expand it character-by-character — each
+        # letter becoming a one-char replacement pattern that nukes the
+        # transcript on every paste.
+        if isinstance(aliases, list):
+            patterns.extend(
+                (a or "").strip() for a in aliases if isinstance(a, str)
+            )
         for sounds in patterns:
             if not sounds:
                 continue

@@ -71,22 +71,45 @@ def _parse_german_compound(word: str) -> int | None:
     return None
 
 
+# v0.9.13 (Codex P1): match up to 4 space-separated number words so
+# "drei tausend Euro" → "3000 €" instead of "drei 1000 €". The previous
+# single-token regex picked up just "tausend" as the number, which is
+# materially wrong. We allow either one digit-literal or 1..4 number
+# words; _format_currency_match then collapses the word sequence by
+# concatenating into one compound the parser can handle.
 _CURRENCY_RE = re.compile(
     r"(?<![\wäöüÄÖÜß])"
-    r"(?P<num>[a-zäöüß]+|\d+(?:[.,]\d+)?)"
+    r"(?P<num>\d+(?:[.,]\d+)?|(?:[a-zäöüß]+(?:\s+[a-zäöüß]+){0,3}))"
     r"\s+(?P<unit>Euro|Cent|CHF|Franken)"
     r"(?![\wäöüÄÖÜß])",
     flags=re.IGNORECASE,
 )
 
+# Scale-only words that must NEVER stand alone as "the number" — they
+# only mean something when joined to a leading multiplier. Used to
+# reject single-token matches like "tausend Euro" (which would otherwise
+# rewrite to "1000 €" even though the speaker said something like
+# "Aktien für tausend Euro" where "tausend" is part of a phrase).
+_SCALE_ONLY = frozenset({"hundert", "tausend", "million", "millionen", "milliarde", "milliarden"})
+
 
 def _format_currency_match(m: re.Match) -> str:
-    raw = m.group("num")
+    raw = m.group("num").strip()
     unit = m.group("unit").lower()
-    if raw.isdigit() or re.fullmatch(r"\d+[.,]\d+", raw):
+    if re.fullmatch(r"\d+(?:[.,]\d+)?", raw):
         n = raw
     else:
-        parsed = _parse_german_compound(raw)
+        words = raw.split()
+        # Reject single bare scale-words — too ambiguous.
+        if len(words) == 1 and words[0].lower() in _SCALE_ONLY:
+            return m.group(0)
+        # Try the whole phrase as one German compound first
+        # ("dreitausend") — that's the common written form. If that
+        # fails, try multiplying the first word(s) into the scale
+        # word(s) — "drei tausend" → "drei" × "tausend" = 3000.
+        parsed = _parse_german_compound("".join(words))
+        if parsed is None and len(words) >= 2:
+            parsed = _multiply_phrase(words)
         if parsed is None:
             return m.group(0)
         n = str(parsed)
@@ -97,6 +120,41 @@ def _format_currency_match(m: re.Match) -> str:
         "franken": " CHF",
     }.get(unit, f" {m.group('unit')}")
     return f"{n}{suffix}"
+
+
+def _multiply_phrase(words: list[str]) -> int | None:
+    """Fold a phrase like ['drei', 'tausend'] into 3000.
+
+    Walks left-to-right, treating each token as either a numeric piece
+    or a scale-word. Returns None on the slightest ambiguity — the
+    caller falls back to leaving the original text alone."""
+    total = 0
+    pending = 0
+    has_pending = False
+    for w in words:
+        wl = w.lower()
+        if wl == "und":
+            continue
+        if wl in ("hundert",):
+            mul = pending if has_pending else 1
+            pending = mul * 100
+            has_pending = True
+            continue
+        if wl in ("tausend",):
+            mul = pending if has_pending else 1
+            total += mul * 1000
+            pending = 0
+            has_pending = False
+            continue
+        n = _parse_german_compound(w)
+        if n is None:
+            return None
+        if has_pending:
+            pending += n
+        else:
+            pending = n
+            has_pending = True
+    return total + (pending if has_pending else 0) or None
 
 
 def _fix_abbreviations(text: str) -> str:
