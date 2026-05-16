@@ -508,6 +508,23 @@ class SettingsDialog(QDialog):
         lf_row.addStretch(1)
         layout.addLayout(lf_row)
 
+        # v0.9.12: DACH Formatting Pack — post-process pass that fixes
+        # German abbreviation spacing (z. B., d. h.), normalises currency
+        # phrases (zweihundert Euro → 200 €), tightens punctuation
+        # spacing, and turns ASCII straight quotes into curly German
+        # „…". Off by default — opt in if you want it.
+        layout.addSpacing(6)
+        layout.addWidget(_section_title("DACH-Formatierung"))
+        self.row_dach_format = _ToggleRow(
+            "Deutsch / Österreich / Schweiz – Formatierungs-Pass",
+            "Korrigiert Abkürzungen (z. B., d. h.), normalisiert Währung "
+            "(zweihundert Euro → 200 €), tightent Satzzeichen-Spacing und "
+            "ersetzt gerade Anführungszeichen durch deutsche („…“). Läuft "
+            "lokal, nach dem Cleanup, vor dem Lexikon-Replace.",
+            bool(getattr(self.config, "dach_format_enabled", False)),
+        )
+        layout.addWidget(self.row_dach_format)
+
         layout.addSpacing(6)
         layout.addWidget(_section_title("Updates"))
         self.row_auto_update = _ToggleRow(
@@ -761,11 +778,19 @@ class SettingsDialog(QDialog):
         ))
 
         self.vocab_table = QTableWidget()
-        self.vocab_table.setColumnCount(2)
-        self.vocab_table.setHorizontalHeaderLabels(["Sounds like", "Write as"])
-        self.vocab_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
+        # v0.9.12 Vocabulary v2: added "Aliases" + "Category" columns.
+        # Aliases is a comma-separated cell for legibility; we split/join
+        # on harvest. Category is a free-text cell (could become a combo
+        # later, but the picker felt over-engineered for v0.9.12).
+        self.vocab_table.setColumnCount(4)
+        self.vocab_table.setHorizontalHeaderLabels(
+            ["Sounds like", "Write as", "Aliases (Komma-getrennt)", "Kategorie"]
         )
+        hdr = self.vocab_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.vocab_table.verticalHeader().setVisible(False)
         # Pre-fill from config
         existing = list(self.config.vocabulary or [])
@@ -776,6 +801,13 @@ class SettingsDialog(QDialog):
             )
             self.vocab_table.setItem(
                 i, 1, QTableWidgetItem(entry.get("write_as", ""))
+            )
+            aliases = entry.get("aliases") or []
+            self.vocab_table.setItem(
+                i, 2, QTableWidgetItem(", ".join(a for a in aliases if a))
+            )
+            self.vocab_table.setItem(
+                i, 3, QTableWidgetItem(entry.get("category", "Other"))
             )
         layout.addWidget(self.vocab_table, 1)
 
@@ -789,6 +821,11 @@ class SettingsDialog(QDialog):
         clear_row = QPushButton("Remove selected")
         clear_row.clicked.connect(self._remove_vocab_row)
         btn_row.addWidget(clear_row)
+        # v0.9.12: suggest new vocab from the on-device history (top
+        # capitalized terms not yet in the Lexikon). Best-effort.
+        suggest_btn = QPushButton("Aus Verlauf vorschlagen")
+        suggest_btn.clicked.connect(self._suggest_vocab_from_history)
+        btn_row.addWidget(suggest_btn)
         btn_row.addStretch(1)
         layout.addLayout(btn_row)
         return page
@@ -798,15 +835,75 @@ class SettingsDialog(QDialog):
         if row >= 0:
             self.vocab_table.removeRow(row)
 
+    def _suggest_vocab_from_history(self) -> None:
+        """Scan the last N transcripts for capitalized multi-character
+        tokens that aren't already in the Lexikon and aren't common
+        German stopwords. Add the top 5 as draft rows."""
+        import re
+        from collections import Counter
+
+        history = list(self.config.history or [])
+        if not history:
+            return
+        existing_writes = {
+            (self.vocab_table.item(r, 1).text() if self.vocab_table.item(r, 1) else "")
+            .strip()
+            .lower()
+            for r in range(self.vocab_table.rowCount())
+        }
+        # Drop the most boring German sentence-starters.
+        stop = {
+            "Die", "Der", "Das", "Ein", "Eine", "Und", "Oder", "Aber",
+            "Ich", "Du", "Wir", "Ihr", "Sie", "Es", "Mit", "Für",
+            "Wenn", "Dann", "Also", "Ja", "Nein", "Was", "Wer", "Wo",
+            "Wie", "Hallo", "Heute", "Morgen", "Gestern",
+        }
+        counter: Counter[str] = Counter()
+        for entry in history:
+            text = entry.get("text", "") or ""
+            for tok in re.findall(r"\b[A-ZÄÖÜ][\wäöüß]{2,}\b", text):
+                if tok in stop:
+                    continue
+                if tok.lower() in existing_writes:
+                    continue
+                counter[tok] += 1
+        suggestions = [tok for tok, count in counter.most_common(5) if count >= 2]
+        if not suggestions:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self,
+                "Lexikon",
+                "Keine neuen Begriffe im Verlauf gefunden (mindestens 2× nötig).",
+            )
+            return
+        # Append draft rows at the bottom of the table.
+        for tok in suggestions:
+            r = self.vocab_table.rowCount()
+            self.vocab_table.insertRow(r)
+            self.vocab_table.setItem(r, 0, QTableWidgetItem(tok))
+            self.vocab_table.setItem(r, 1, QTableWidgetItem(tok))
+            self.vocab_table.setItem(r, 2, QTableWidgetItem(""))
+            self.vocab_table.setItem(r, 3, QTableWidgetItem("Other"))
+
     def _harvest_vocab(self) -> list[dict]:
         out: list[dict] = []
         for r in range(self.vocab_table.rowCount()):
             sl_item = self.vocab_table.item(r, 0)
             wa_item = self.vocab_table.item(r, 1)
+            al_item = self.vocab_table.item(r, 2)
+            cat_item = self.vocab_table.item(r, 3)
             sl = (sl_item.text().strip() if sl_item else "")
             wa = (wa_item.text().strip() if wa_item else "")
+            al = (al_item.text().strip() if al_item else "")
+            cat = (cat_item.text().strip() if cat_item else "")
             if sl and wa:
-                out.append({"sounds_like": sl, "write_as": wa})
+                aliases = [a.strip() for a in al.split(",") if a.strip()]
+                out.append({
+                    "sounds_like": sl,
+                    "write_as": wa,
+                    "aliases": aliases,
+                    "category": cat or "Other",
+                })
         return out
 
     # ── Tab: Auto-Mode (custom window→style rules) ─────────────────────────
@@ -1694,6 +1791,8 @@ class SettingsDialog(QDialog):
             config.diarization_enabled = self.row_diarization.is_on()
         if hasattr(self, "row_history_enabled"):
             config.history_enabled = self.row_history_enabled.is_on()
+        if hasattr(self, "row_dach_format"):
+            config.dach_format_enabled = self.row_dach_format.is_on()
         config.auto_update_check = self.row_auto_update.is_on()
 
         config.subunit_endpoint = (

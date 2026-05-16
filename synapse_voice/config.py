@@ -181,7 +181,19 @@ class Config:
     # entry: {"sounds_like": "z.B. wie es klingt", "write_as": "Korrekt"}.
     # The "write_as" values feed Whisper as initial_prompt; both are also
     # used in a post-process replace so persistent mishears are corrected.
+    #
+    # v0.9.12 (Vocabulary v2): each entry may also carry
+    #   "category": Person | Company | Tech | Place | Other
+    #   "aliases": list[str] of additional sounds_like patterns
+    # Old entries without these fields keep working — they're migrated
+    # to category="Other"/aliases=[] on first read.
     vocabulary: list[dict] = field(default_factory=list)
+
+    # v0.9.12: DACH Formatting Pack. Post-process pass that fixes German
+    # abbreviation spacing, currency phrases, punctuation spacing and
+    # turns ASCII straight quotes into German curly „…". Off by default
+    # so existing dictation behavior is unchanged unless opted in.
+    dach_format_enabled: bool = False
 
     history_size: int = 50
     history: list[dict] = field(default_factory=list)
@@ -216,6 +228,18 @@ class Config:
             # to the new default ("prompt") on load.
             if cfg.cleanup_style == "tidy":
                 cfg.cleanup_style = "prompt"
+                cfg.save()
+            # v0.9.12: backfill new Vocabulary v2 fields on legacy entries
+            # so the rest of the app can rely on category/aliases existing.
+            migrated = False
+            for entry in cfg.vocabulary or []:
+                if "category" not in entry:
+                    entry["category"] = "Other"
+                    migrated = True
+                if "aliases" not in entry:
+                    entry["aliases"] = []
+                    migrated = True
+            if migrated:
                 cfg.save()
             return cfg
         except (json.JSONDecodeError, TypeError):

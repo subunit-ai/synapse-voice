@@ -78,28 +78,44 @@ def _vocab_prompt(config) -> str:
     Whisper biases toward terms in the prompt — passing the canonical
     spellings makes it much more likely to transcribe them correctly."""
     vocab = getattr(config, "vocabulary", None) or []
-    terms = [v.get("write_as", "").strip() for v in vocab]
-    return ", ".join(t for t in terms if t)
+    # De-duplicate write_as to keep the prompt short — Whisper's prompt
+    # window is small and v0.9.12 Vocabulary v2 makes it likely that the
+    # same canonical term shows up in multiple entries.
+    seen: set[str] = set()
+    terms: list[str] = []
+    for v in vocab:
+        t = (v.get("write_as") or "").strip()
+        if t and t.lower() not in seen:
+            seen.add(t.lower())
+            terms.append(t)
+    return ", ".join(terms)
 
 
 def apply_vocab_replace(text: str, config) -> str:
     """Post-process: literal-replace any Lexikon `sounds_like` matches with
     the canonical `write_as`. Case-insensitive, word-boundary-aware so we
-    don't replace inside other words. Runs after transcription + cleanup."""
+    don't replace inside other words. Runs after transcription + cleanup.
+
+    v0.9.12: also honours each entry's ``aliases`` list (additional
+    sounds_like patterns mapping to the same canonical form)."""
     import re
 
     vocab = getattr(config, "vocabulary", None) or []
     out = text
     for entry in vocab:
-        sounds = (entry.get("sounds_like") or "").strip()
         canon = (entry.get("write_as") or "").strip()
-        if not sounds or not canon:
+        if not canon:
             continue
-        # Word-boundary match, case-insensitive. \b inside Python re works
-        # well enough for ASCII; for the German umlaut case we extend the
-        # boundary class manually.
-        pattern = r"(?<![\wäöüÄÖÜß])" + re.escape(sounds) + r"(?![\wäöüÄÖÜß])"
-        out = re.sub(pattern, canon, out, flags=re.IGNORECASE)
+        patterns = [(entry.get("sounds_like") or "").strip()]
+        patterns.extend([(a or "").strip() for a in (entry.get("aliases") or [])])
+        for sounds in patterns:
+            if not sounds:
+                continue
+            # Word-boundary match, case-insensitive. \b inside Python re
+            # works for ASCII; we extend the boundary class manually for
+            # German umlauts so "Höhe" inside "Höhepunkt" is not split.
+            pattern = r"(?<![\wäöüÄÖÜß])" + re.escape(sounds) + r"(?![\wäöüÄÖÜß])"
+            out = re.sub(pattern, canon, out, flags=re.IGNORECASE)
     return out
 
 

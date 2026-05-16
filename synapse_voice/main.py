@@ -161,6 +161,15 @@ class TranscribeWorker(QObject):
                         len(cleaned),
                     )
                     text = cleaned
+            # v0.9.12 DACH Formatting Pack: post-process pass that fixes
+            # currency phrases / abbreviation spacing / German quotes.
+            # Runs BEFORE vocab so the vocab replacements see the
+            # canonical spacing, and AFTER cleanup so any rewrite the
+            # cleanup model did is normalised.
+            if text and getattr(self._config, "dach_format_enabled", False):
+                from .dach_format import format_dach
+
+                text = format_dach(text)
             # v0.3.9 Lexikon: post-process literal-replace pass to catch
             # mishears the prompt didn't fix (Whisper sometimes ignores
             # initial_prompt for non-canonical pronunciations).
