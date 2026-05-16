@@ -416,6 +416,10 @@ class SynapseVoiceApp(QObject):
         # shown when the user opts in via Settings — keeps the door open
         # for in-session toggling without a restart.
         self.orb: Optional[OrbOverlay] = None
+        # v0.9.10: cached update-info from the last GitHub check (set by
+        # _check_for_updates). Profile-card UI reads this to decide
+        # whether to show "Update verfügbar" pill + install button.
+        self._available_update = None
         if self.config.use_orb_overlay:
             self.orb = OrbOverlay(self.config, on_change_mode=self.change_mode)
             self.orb.set_level_provider(lambda: self.recorder.level)
@@ -440,6 +444,15 @@ class SynapseVoiceApp(QObject):
             current_mode=self.config.mode,
         )
         self.tray.show()
+        # v0.9.10: clicking the tray balloon (when the update toast fires)
+        # opens the full install dialog. messageClicked is a QSystemTrayIcon
+        # signal; we route it to the install prompt only when an update is
+        # actually pending — other tray notifications (paste-done etc.)
+        # leave it a no-op.
+        try:
+            self.tray.messageClicked.connect(self._on_tray_balloon_clicked)
+        except Exception:
+            pass
 
         # In "toggle" mode the hotkey toggles record on each press. In "hold"
         # mode pressing starts recording and releasing stops it.
@@ -647,17 +660,44 @@ class SynapseVoiceApp(QObject):
                 self.orb.show_state("done")
             self.tray.set_state("done", f"pasted → {title[:32]}")
         elif mode == "clipboard":
+            # v0.9.10 (Codex paste-reliability): text IS in the clipboard
+            # — make the recovery action obvious. Many users assume
+            # "copied to clipboard" means failure; spell out the Ctrl+V
+            # gesture so they don't lose the transcript.
             if self.orb is None:
-                self.bubble.show_state("done", "✓ copied to clipboard", auto_hide_ms=2800)
+                self.bubble.show_state(
+                    "done", "📋 in Zwischenablage — Strg+V drücken", auto_hide_ms=3500
+                )
             else:
                 self.orb.show_state("done")
-            self.tray.set_state("done", "copied to clipboard")
+            self.tray.set_state("done", "in Zwischenablage — Strg+V drücken")
+            try:
+                self.tray.showMessage(
+                    "Sonar — bereit zum Einfügen",
+                    "Text steht in der Zwischenablage. Strg+V drücken um manuell einzufügen.",
+                    msecs=3500,
+                )
+            except Exception:
+                pass
         else:
+            # mode == 'none' → set_clipboard itself failed (rare; Linux
+            # without xclip/wl-copy/Qt). Tell the user explicitly.
             if self.orb is None:
-                self.bubble.show_state("error", "paste failed", auto_hide_ms=2800)
+                self.bubble.show_state(
+                    "error", "Zwischenablage fehlgeschlagen — Diagnose in Settings",
+                    auto_hide_ms=4000,
+                )
             else:
                 self.orb.show_state("error")
-            self.tray.set_state("error", "paste failed")
+            self.tray.set_state("error", "Zwischenablage fehlgeschlagen")
+            try:
+                self.tray.showMessage(
+                    "Sonar — Fehler",
+                    "Zwischenablage nicht erreichbar. Settings → Profil → Diagnose kopieren für Debug.",
+                    msecs=5000,
+                )
+            except Exception:
+                pass
         QTimer.singleShot(2500, lambda: (self.tray.set_state("idle", "idle"), self._safe_status("idle")))
 
     def _on_auto_mode_picked(self, style: str, label: str) -> None:
@@ -988,29 +1028,76 @@ class SynapseVoiceApp(QObject):
         self.tray.set_mode(mode)
         self.tray.showMessage("Sonar", f"Mode: {mode}", msecs=1500)
 
-    def _check_for_updates(self) -> None:
-        from PyQt6.QtCore import QUrl
-        from PyQt6.QtGui import QDesktopServices
+    def _check_for_updates(self, interactive: bool = False) -> None:
+        """Check GitHub for a newer release.
+
+        Non-interactive (auto, at startup): silent if nothing new, tray
+        toast + cached info if an update is available. The user can
+        review/install later from Settings → Profile.
+
+        Interactive (Profile "Update prüfen" button): always shows a
+        result message so the user knows the check happened.
+        """
         from PyQt6.QtWidgets import QMessageBox
 
         from . import updater
 
         info = updater.check()
+        # Stash on the instance so the Profile card can offer "Install"
+        # later without re-checking the GitHub endpoint.
+        self._available_update = info if (info and info.available) else None
+
         if info is None or not info.available:
+            if interactive:
+                QMessageBox.information(
+                    None, "Sonar — Update",
+                    f"Du bist auf der neuesten Version (v{getattr(info, 'current', __version__)}).",
+                )
             return
-        _log.info("Prompting user for update %s → %s", info.current, info.latest)
+
+        _log.info("Update available %s → %s (interactive=%s)", info.current, info.latest, interactive)
+        # 2026-05-16 (TJ-feedback v0.9.10): replace the auto-modal
+        # QMessageBox with a non-blocking tray toast. Users hated being
+        # interrupted mid-dictation 8s after launch. The full install
+        # dialog is now reachable from the tray-toast click and from
+        # Settings → Profile → "Update verfügbar".
+        try:
+            self.tray.showMessage(
+                "Sonar — Update verfügbar",
+                f"v{info.current} → {info.latest}. Klick zum Installieren oder über Settings.",
+                msecs=6000,
+            )
+        except Exception:
+            pass
+
+        if interactive:
+            # Open the full install dialog right away — the user asked.
+            self._prompt_update_install(info)
+
+    def _on_tray_balloon_clicked(self) -> None:
+        """Tray balloon click handler. Opens the install prompt when an
+        update is pending; otherwise raises the main window."""
+        if self._available_update is not None:
+            self._prompt_update_install(self._available_update)
+        else:
+            self.open_window()
+
+    def _prompt_update_install(self, info) -> None:
+        """Full Yes/No install dialog. Spawned from tray-click or from
+        the Profile card's "Update installieren" button."""
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+        from PyQt6.QtWidgets import QMessageBox
+
         box = QMessageBox()
         box.setIcon(QMessageBox.Icon.Information)
-        box.setWindowTitle("Sonar — Update available")
-        # If we have a direct installer URL we offer a one-click install,
-        # otherwise we fall back to the release page (e.g. unsupported
-        # platform or asset naming changed).
+        box.setWindowTitle("Sonar — Update verfügbar")
         if info.installer_url:
             box.setText(
-                f"A new version is available:\n\n"
-                f"  Current: v{info.current}\n"
-                f"  Latest:  {info.latest}\n\n"
-                f"Download and install now? The app will close + reopen."
+                f"Neue Version verfügbar:\n\n"
+                f"  Aktuell: v{info.current}\n"
+                f"  Neueste: {info.latest}\n\n"
+                f"Jetzt herunterladen + installieren? Sonar wird neu gestartet."
             )
             box.setStandardButtons(
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
@@ -1020,10 +1107,10 @@ class SynapseVoiceApp(QObject):
                 self._download_and_install(info)
         else:
             box.setText(
-                f"A new version is available:\n\n"
-                f"  Current: v{info.current}\n"
-                f"  Latest:  {info.latest}\n\n"
-                f"Open the release page to download?"
+                f"Neue Version verfügbar:\n\n"
+                f"  Aktuell: v{info.current}\n"
+                f"  Neueste: {info.latest}\n\n"
+                f"Release-Seite öffnen?"
             )
             box.setStandardButtons(
                 QMessageBox.StandardButton.Open

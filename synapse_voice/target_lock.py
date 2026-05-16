@@ -280,10 +280,23 @@ def set_clipboard(text: str) -> bool:
                 input=text.encode("utf-8"),
                 check=False,
             )
-            return p.returncode == 0
+            if p.returncode == 0:
+                return True
+            _log_paste(f"xclip set failed rc={p.returncode}, trying Qt fallback")
         if _have("wl-copy"):
             p = subprocess.run(["wl-copy"], input=text.encode("utf-8"), check=False)
-            return p.returncode == 0
+            if p.returncode == 0:
+                return True
+            _log_paste(f"wl-copy failed rc={p.returncode}, trying Qt fallback")
+        # 2026-05-16 (v0.9.10, Codex paste-reliability hardening):
+        # Last-ditch Qt fallback when neither xclip nor wl-copy is
+        # installed (rare on desktop Linux but common in minimal
+        # container shells or stripped distros). Qt routes to the same
+        # underlying X11/Wayland clipboard protocol but doesn't need
+        # the subprocess hop.
+        if _qt_set_clipboard(text):
+            return True
+        _log_paste("set_clipboard: ALL Linux paths failed (xclip/wl-copy/Qt)")
         return False
     if sys.platform == "win32":
         # Use Qt's clipboard instead of raw Win32 ctypes.  The previous
@@ -702,11 +715,28 @@ def paste_into(target: WindowTarget | None, text: str) -> tuple[bool, str]:
     # SendInput (returns sent=0) and made GetFocus return NULL — so
     # WM_PASTE always fell back to the wrong (top-level) HWND.
     if target.platform == "win32":
-        return _win_paste_attached(
+        # 2026-05-16 (v0.9.10): retry-once shield. The Windows paste path
+        # has a number of transient failure modes (foreground-lock timing,
+        # IME composition window, child-HWND focus race). One quick retry
+        # after a short backoff turns most of those into successful
+        # pastes; if it still fails the text is already in the clipboard
+        # so the user can Ctrl+V manually.
+        result = _win_paste_attached(
             int(target.window_id),
             target.title or "",
             captured_focus_hwnd=target.focus_hwnd,
         )
+        if result == (True, "pasted"):
+            return result
+        # Retry once with a small delay — gives the OS time to settle
+        # focus + flush input queue.
+        time.sleep(0.18)
+        retry = _win_paste_attached(
+            int(target.window_id),
+            target.title or "",
+            captured_focus_hwnd=target.focus_hwnd,
+        )
+        return retry if retry == (True, "pasted") else result
 
     # Linux: xdotool already activated the window, single shot keystroke.
     if not focus_window(target):

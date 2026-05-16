@@ -1099,6 +1099,20 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(self.profile_card)
 
+        # 2026-05-16 (v0.9.10, Codex self-heal): Refresh + Diagnose buttons
+        # under the Profile card so Erik-style debug sessions are a click
+        # away — no need to ping TJ for "what tier am I on?".
+        diag_row = QHBoxLayout()
+        diag_row.setSpacing(8)
+        self.profile_refresh_btn = QPushButton("Account aktualisieren")
+        self.profile_refresh_btn.clicked.connect(self._refresh_profile_card)
+        diag_row.addWidget(self.profile_refresh_btn)
+        self.profile_diag_btn = QPushButton("Diagnose kopieren")
+        self.profile_diag_btn.clicked.connect(self._copy_diagnostics)
+        diag_row.addWidget(self.profile_diag_btn)
+        diag_row.addStretch(1)
+        layout.addLayout(diag_row)
+
         # Update the status line + button states from current config.
         self._refresh_subunit_login_status()
         # Kick off the live profile fetch in the background — the
@@ -1301,6 +1315,67 @@ class SettingsDialog(QDialog):
         self._refresh_account_status()
 
     # ── Subunit-Account browser-login flow (v0.9.5) ─────────────────────
+
+    def _copy_diagnostics(self) -> None:
+        """Assemble a diagnostics text payload + copy to the system
+        clipboard. Includes version, OS/arch, mode, account-tier, last
+        log lines — no secrets (tokens, API keys are redacted)."""
+        import platform
+        import sys
+        from .. import __version__
+        from PyQt6.QtWidgets import QApplication
+
+        def redact(v: str) -> str:
+            if not v:
+                return ""
+            if len(v) <= 8:
+                return "***"
+            return v[:4] + "…" + v[-4:]
+
+        lines = []
+        lines.append("=== Sonar Diagnose ===")
+        lines.append(f"Version: v{__version__}")
+        lines.append(f"OS: {platform.system()} {platform.release()} {platform.machine()}")
+        lines.append(f"Python: {sys.version.split()[0]}")
+        lines.append("")
+        lines.append("--- Config (redacted) ---")
+        lines.append(f"Mode: {self.config.mode}")
+        lines.append(f"Local model: {self.config.local_model}")
+        lines.append(f"Hotkey: {self.config.hotkey}")
+        lines.append(f"Recording mode: {self.config.recording_mode}")
+        lines.append(f"Subunit endpoint: {self.config.subunit_endpoint}")
+        lines.append(f"Subunit Bearer: {redact(getattr(self.config, 'subunit_access_token', '') or '')}")
+        lines.append(f"Subunit API-Key: {redact(getattr(self.config, 'subunit_api_key', '') or '')}")
+        lines.append(f"Account email: {getattr(self.config, 'account_email', '') or '—'}")
+        lines.append(f"Cloud quality mode: {getattr(self.config, 'cloud_quality_mode', 'auto')}")
+        lines.append(f"Overlay style: {getattr(self.config, 'orb_overlay_style', 'sphere')}")
+        lines.append("")
+        lines.append("--- Profile (live) ---")
+        lines.append(f"Email displayed: {self.profile_email_val.text()}")
+        lines.append(f"Plan badge: {self.profile_plan_badge.text()}")
+        lines.append(f"Access: {self.profile_access_val.text()}")
+        # Tail of the log file if accessible
+        try:
+            from ..logger import log_file_path
+            p = log_file_path()
+            if p and p.exists():
+                lines.append("")
+                lines.append(f"--- Log tail ({p.name}, last 30 lines) ---")
+                with open(p, "r", encoding="utf-8", errors="replace") as f:
+                    tail = f.readlines()[-30:]
+                lines.extend(t.rstrip() for t in tail)
+        except Exception as exc:
+            lines.append(f"(log tail unavailable: {exc})")
+
+        text = "\n".join(lines)
+        try:
+            QApplication.clipboard().setText(text)
+            self.profile_diag_btn.setText("✓ In Zwischenablage")
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(2200, lambda: self.profile_diag_btn.setText("Diagnose kopieren"))
+        except Exception:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Sonar — Diagnose", text)
 
     def _refresh_profile_card(self) -> None:
         """Populate the inline Profile card with live data from the
