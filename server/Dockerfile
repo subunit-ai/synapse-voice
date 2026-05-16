@@ -41,6 +41,14 @@ ARG WHISPER_FAST_MODEL=small
 ENV WHISPER_FAST_MODEL=${WHISPER_FAST_MODEL}
 RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('${WHISPER_FAST_MODEL}', device='cpu', compute_type='int8')"
 
+# 2026-05-16: Instant-mode model — multilingual Whisper `base`.
+# `base` is ~3x faster than `small` and ~12x faster than turbo, used
+# for the Auto-mode short-clip path (<5s) where snap matters more
+# than DACH fachvokabular accuracy. ~70MB.
+ARG WHISPER_INSTANT_MODEL=base
+ENV WHISPER_INSTANT_MODEL=${WHISPER_INSTANT_MODEL}
+RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('${WHISPER_INSTANT_MODEL}', device='cpu', compute_type='int8')"
+
 # Pre-download wespeaker (~25MB) so the first /v1/diarize call doesn't
 # have to fetch from wespeaker-1256283475.cos.ap-shanghai.myqcloud.com
 # at request time (which can be slow + flaky from EU servers).

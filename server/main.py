@@ -38,23 +38,30 @@ import meet_endpoints as _meet_mod
 import email_send as _email_send
 
 MODEL_NAME = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
-# 2026-05-16: Quality vs Fast modes. Quality = the default MODEL_NAME
-# (large-v3-turbo). Fast = `small` for true instant-paste feel on Sonar
-# hotkey-release. Multilingual (German + Umlaute work), ~4x faster than
-# large-v3-turbo on the 1070 Ti.
+# 2026-05-16: 3 quality tiers + Auto.
+#   Quality (default MODEL_NAME) = large-v3-turbo — best accuracy.
+#   Fast    = `small`            — ~4x faster, still solid German.
+#   Instant = `base`             — ~12x faster, basic accuracy.
+# All three are multilingual (German + Umlaute reliable). Each is
+# loaded lazily on first use and cached.
 FAST_MODEL_NAME = os.environ.get("WHISPER_FAST_MODEL", "small")
-# 2026-05-16: When the client sends `quality_mode=auto` we pick Fast
-# for clips shorter than this threshold (instant feel for one-liner
-# dictations) and Quality for everything longer (don't sacrifice
-# accuracy on meetings/long-form). Tuneable via env.
+INSTANT_MODEL_NAME = os.environ.get("WHISPER_INSTANT_MODEL", "base")
+# Auto thresholds: <INSTANT_THR_S → instant, [INSTANT_THR_S..FAST_THR_S) → fast,
+# ≥ FAST_THR_S → quality. Tuned so one-liners are instant, mid-form is
+# snappy, and long-form keeps full accuracy.
+AUTO_INSTANT_THRESHOLD_S = float(os.environ.get("WHISPER_AUTO_INSTANT_S", "5.0"))
+AUTO_FAST_THRESHOLD_S = float(os.environ.get("WHISPER_AUTO_FAST_S", "20.0"))
+# Legacy alias retained for env compatibility — old name pointed at the
+# Fast/Quality split (8s). New cleaner names are above.
 AUTO_SHORT_THRESHOLD_S = float(os.environ.get("WHISPER_AUTO_THRESHOLD_S", "8.0"))
 DEVICE = os.environ.get("WHISPER_DEVICE", "auto")  # auto | cpu | cuda
 COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE", "auto")  # auto | float16 | int8
 API_KEY = os.environ.get("TRANSCRIBE_API_KEY", "")
 MAX_AUDIO_MB = int(os.environ.get("TRANSCRIBE_MAX_MB", "25"))
 
-_model = None       # quality (large-v3-turbo)
-_fast_model = None  # fast (distil-large-v3)
+_model = None          # quality (large-v3-turbo)
+_fast_model = None     # fast (small)
+_instant_model = None  # instant (base)
 
 
 def _resolve_device_compute():
@@ -92,10 +99,8 @@ def _load_model():
 
 
 def _load_fast_model():
-    """Lazy-load the Fast model (distil-large-v3). First /v1/transcribe
-    call with quality_mode=fast triggers the download — keeps cold-boot
-    cost on the quality path predictable, and skips entirely if no
-    client ever asks for Fast."""
+    """Lazy-load the Fast model (small). First /v1/transcribe call
+    with quality_mode=fast (or auto routing) triggers the load."""
     global _fast_model
     if _fast_model is not None:
         return _fast_model
@@ -105,9 +110,6 @@ def _load_fast_model():
     try:
         _fast_model = WhisperModel(FAST_MODEL_NAME, device=device, compute_type=compute_type)
     except Exception as e:
-        # If distil-large-v3 isn't available (network, model not pulled),
-        # silently fall back to the quality model for "fast" requests so
-        # the user still gets a transcript. Logged but not raised.
         print(f"[transcribe] fast model load FAILED ({e}); using quality fallback", flush=True)
         _fast_model = _load_model()
         return _fast_model
@@ -115,11 +117,31 @@ def _load_fast_model():
     return _fast_model
 
 
+def _load_instant_model():
+    """Lazy-load the Instant model (base). Loaded on first request that
+    needs it; subsequent calls reuse the cached instance."""
+    global _instant_model
+    if _instant_model is not None:
+        return _instant_model
+    from faster_whisper import WhisperModel
+    device, compute_type = _resolve_device_compute()
+    print(f"[transcribe] loading {INSTANT_MODEL_NAME} (instant) on {device}/{compute_type}", flush=True)
+    try:
+        _instant_model = WhisperModel(INSTANT_MODEL_NAME, device=device, compute_type=compute_type)
+    except Exception as e:
+        print(f"[transcribe] instant model load FAILED ({e}); falling back to fast", flush=True)
+        _instant_model = _load_fast_model()
+        return _instant_model
+    print(f"[transcribe] instant model ready", flush=True)
+    return _instant_model
+
+
 def _model_for(quality_mode: str | None):
     """Pick the right loaded WhisperModel for a request. Default ('' or
-    anything we don't recognise) = quality, so old clients without the
-    quality_mode field keep their behavior."""
+    unknown) = quality, so old clients without the field keep their behavior."""
     mode = (quality_mode or "").strip().lower()
+    if mode == "instant":
+        return _load_instant_model()
     if mode == "fast":
         return _load_fast_model()
     return _load_model()
@@ -365,36 +387,43 @@ async def transcribe(
     initial_prompt = (prompt or "").strip()[:1024] or None
 
     t0 = time.time()
-    # 2026-05-16: quality_mode picks between models.
-    #   quality → large-v3-turbo (multilingual, best accuracy)
-    #   fast    → small (multilingual, ~4x faster, instant-paste feel)
-    #   auto    → fast for clips < AUTO_SHORT_THRESHOLD_S, else quality.
-    #             Lets the server pick the right model based on length
-    #             so short one-liners feel instant and long dictations
-    #             keep their accuracy without the user toggling.
+    # 2026-05-16: 3 quality tiers + Auto.
+    #   instant → base (~12x faster than turbo, basic German)
+    #   fast    → small (~4x faster, solid German)
+    #   quality → large-v3-turbo (best accuracy)
+    #   auto    → instant for <AUTO_INSTANT_THRESHOLD_S clips,
+    #             fast for <AUTO_FAST_THRESHOLD_S, quality otherwise.
     mode_raw = (quality_mode or "quality").strip().lower()
-    # Audio is decoded at 16kHz by _decode_audio — that's Whisper's expected rate.
+    # Audio is decoded at 16kHz by _decode_audio — Whisper's expected rate.
     audio_duration_s = float(audio.size) / 16000.0 if audio.size else 0.0
     if mode_raw == "auto":
-        effective_mode = "fast" if audio_duration_s < AUTO_SHORT_THRESHOLD_S else "quality"
-    elif mode_raw == "fast":
-        effective_mode = "fast"
+        if audio_duration_s < AUTO_INSTANT_THRESHOLD_S:
+            effective_mode = "instant"
+        elif audio_duration_s < AUTO_FAST_THRESHOLD_S:
+            effective_mode = "fast"
+        else:
+            effective_mode = "quality"
+    elif mode_raw in ("instant", "fast"):
+        effective_mode = mode_raw
     else:
         effective_mode = "quality"
     model = _model_for(effective_mode)
-    used_model = FAST_MODEL_NAME if effective_mode == "fast" else MODEL_NAME
+    used_model = {
+        "instant": INSTANT_MODEL_NAME,
+        "fast":    FAST_MODEL_NAME,
+        "quality": MODEL_NAME,
+    }[effective_mode]
     # v0.6.0: "auto" or empty language → let faster-whisper detect
     # the language per utterance.  Useful for mixed-language meetings.
     lang_arg = None if language in ("", "auto", None) else language
-    # Fast mode trades beam_size=1 for latency — beam_size=5 is the
-    # quality default. Together with the smaller model this is what
-    # gets us the "instant paste" feel TJ asked for.
-    is_fast = effective_mode == "fast"
+    # beam_size scales with the tier: instant aims for snap (beam=1),
+    # quality uses the full beam search.
+    beam = {"instant": 1, "fast": 1, "quality": 5}[effective_mode]
     segments_iter, info = model.transcribe(
         audio,
         language=lang_arg,
         initial_prompt=initial_prompt,
-        beam_size=1 if is_fast else 5,
+        beam_size=beam,
         vad_filter=True,
     )
     # 2026-05-14: materialise segments so we can both join text AND

@@ -648,12 +648,13 @@ class MainWindow(QMainWindow):
         self._detail_layout.addWidget(chip, 0, Qt.AlignmentFlag.AlignVCenter)
 
     def _build_quality_toggle(self) -> QVBoxLayout:
-        """Three-pill segmented control: AUTO | QUALITY | FAST.
+        """Four-pill segmented control: AUTO | INSTANT | FAST | QUALITY.
 
-        v0.9.7: added Auto. Server-side picks Fast (small) for clips
-        under ~8s and Quality (large-v3-turbo) for longer dictations.
-        Auto is the new default since it gives instant feel on
-        one-liners without sacrificing accuracy on meetings.
+        v0.9.7: added Auto.
+        v0.9.9: added Instant tier (base model, ~12x faster than turbo).
+        Server-side Auto routing: <5s → Instant, 5-20s → Fast, ≥20s → Quality.
+        Auto is the default — fits short, snappy dictations AND long
+        accurate meetings without the user toggling.
         """
         from PyQt6.QtWidgets import QButtonGroup
 
@@ -670,11 +671,16 @@ class MainWindow(QMainWindow):
         current = (getattr(self.config, "cloud_quality_mode", "auto") or "auto").lower()
         group = QButtonGroup(self)
         group.setExclusive(True)
-        for value, label in (("auto", "AUTO"), ("quality", "QUALITY"), ("fast", "FAST")):
+        for value, label in (
+            ("auto",    "AUTO"),
+            ("instant", "INSTANT"),
+            ("fast",    "FAST"),
+            ("quality", "QUALITY"),
+        ):
             b = QPushButton(label)
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setMinimumWidth(70)
+            b.setMinimumWidth(62)
             b.setObjectName("qualityPillActive" if value == current else "qualityPill")
             b.setProperty("modeValue", value)
             if value == current:
@@ -686,7 +692,7 @@ class MainWindow(QMainWindow):
         return col
 
     def _on_quality_mode_changed(self, value: str) -> None:
-        if value not in ("auto", "quality", "fast"):
+        if value not in ("auto", "instant", "fast", "quality"):
             return
         if getattr(self.config, "cloud_quality_mode", "quality") == value:
             return
