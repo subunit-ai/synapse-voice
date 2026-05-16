@@ -67,7 +67,12 @@ class _PrewarmWorker(QObject):
 
 
 class TranscribeWorker(QObject):
-    finished = pyqtSignal(str)
+    # v0.9.11: emit (text, effective_quality_mode). The second arg is "" for
+    # local transcripts and "instant"/"fast"/"quality" for cloud — it's the
+    # tier the server actually ran (may differ from the user's selection
+    # when quality_mode="auto"). UI uses it to render a per-row tier badge
+    # in Recent-Transcripts.
+    finished = pyqtSignal(str, str)
     failed = pyqtSignal(str)
     # v0.3.25: emit (style, label) when Auto-Mode picks a style different
     # from the user's manual default. main.py uses this to flash a small
@@ -177,7 +182,11 @@ class TranscribeWorker(QObject):
             if text and self._audio is not None:
                 duration_s = float(self._audio.shape[0]) / 16000.0
                 self._maybe_persist_meeting(text=text, duration_s=duration_s, style_used=style)
-            self.finished.emit(text)
+            # v0.9.11: capture the effective tier the server actually ran.
+            # Local transcribers don't set this — emit "" so the UI shows
+            # no badge for local runs.
+            effective_mode = str(getattr(transcriber, "last_quality_mode", "") or "")
+            self.finished.emit(text, effective_mode)
         except TranscriberError as e:
             _log.error("Transcribe failed (mode=%s): %s", self._mode, e)
             self.failed.emit(str(e))
@@ -613,7 +622,7 @@ class SynapseVoiceApp(QObject):
         except ValueError:
             pass
 
-    def _on_transcribe_done(self, text: str) -> None:
+    def _on_transcribe_done(self, text: str, quality_mode: str = "") -> None:
         text = (text or "").strip()
         if not text:
             self.tray.set_state("idle", "idle (empty)")
@@ -647,7 +656,7 @@ class SynapseVoiceApp(QObject):
             set_clipboard(text)
             mode = "clipboard"
 
-        self._record_history(text, mode)
+        self._record_history(text, mode, quality_mode=quality_mode)
         # TJ-feedback v0.3.17: sound ONLY on hotkey-press (record start),
         # not on paste-done. The "done" event is already conveyed by the
         # text appearing in the target window — a second sound felt
@@ -814,19 +823,29 @@ class SynapseVoiceApp(QObject):
         self.tray.showMessage("Sonar — error", message, msecs=4000)
         QTimer.singleShot(3000, lambda: (self.tray.set_state("idle", "idle"), self._safe_status("idle")))
 
-    def _record_history(self, text: str, mode: str) -> None:
-        entry = {
-            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "text": text,
-            "mode": self.config.mode,
-            "paste_mode": mode,
-            "target": self.target.title if self.target else None,
-        }
-        self.config.history.append(entry)
-        self.config.history = self.config.history[-self.config.history_size :]
+    def _record_history(
+        self, text: str, mode: str, quality_mode: str = ""
+    ) -> None:
+        # v0.9.11: counters always tick (so the Settings "total transcriptions"
+        # stat stays honest) but the per-snippet entry is skipped when the user
+        # opted out of history. quality_mode is the cloud tier the server
+        # actually ran ("instant" / "fast" / "quality") — empty for local
+        # transcripts.
         self.config.total_transcriptions += 1
         if self._last_audio_seconds:
             self.config.total_audio_seconds += self._last_audio_seconds
+        history_enabled = bool(getattr(self.config, "history_enabled", True))
+        if history_enabled:
+            entry = {
+                "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "text": text,
+                "mode": self.config.mode,
+                "paste_mode": mode,
+                "target": self.target.title if self.target else None,
+                "quality_mode": quality_mode or "",
+            }
+            self.config.history.append(entry)
+            self.config.history = self.config.history[-self.config.history_size :]
         self.config.save()
         try:
             self.main_window.refresh()

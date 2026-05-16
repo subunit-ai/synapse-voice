@@ -185,6 +185,11 @@ class Config:
 
     history_size: int = 50
     history: list[dict] = field(default_factory=list)
+    # v0.9.11: Privacy switch — when off, transcripts are no longer
+    # persisted to history (counters still tick so the Settings totals
+    # stay honest). Turn off via Settings → Privatsphäre. Existing
+    # entries stay until the user clears them manually.
+    history_enabled: bool = True
     # Stats
     total_transcriptions: int = 0
     total_audio_seconds: float = 0.0

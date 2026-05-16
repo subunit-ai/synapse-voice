@@ -1143,6 +1143,20 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self.row_diarization)
 
+        # v0.9.11: Privatsphäre — opt-out of the on-device transcript
+        # history. Counters stay on (so the totals shown in this dialog
+        # remain truthful), but no per-snippet text is stored. Existing
+        # entries are kept until the user clears them manually.
+        self.row_history_enabled = _ToggleRow(
+            "Verlauf speichern (Recent-Transcripts)",
+            "Wenn aus: keine Transkripte werden auf diesem Gerät gespeichert. "
+            "Du verlierst die Re-paste-Funktion und die Liste auf dem Hauptscreen, "
+            "aber Aufnahmen verlassen den RAM nie. Bestehende Einträge bleiben "
+            "bis du sie über History → Clear löschst.",
+            bool(getattr(self.config, "history_enabled", True)),
+        )
+        layout.addWidget(self.row_history_enabled)
+
         # 2026-05-14 (codex review #5): make DSGVO concrete and visible in
         # the product instead of leaving it as a brand claim. EU buyers
         # ask for these facts every time — surface them so they don't
@@ -1678,6 +1692,8 @@ class SettingsDialog(QDialog):
             config.synapse_save_enabled = self.row_synapse_save.is_on()
         if hasattr(self, "row_diarization"):
             config.diarization_enabled = self.row_diarization.is_on()
+        if hasattr(self, "row_history_enabled"):
+            config.history_enabled = self.row_history_enabled.is_on()
         config.auto_update_check = self.row_auto_update.is_on()
 
         config.subunit_endpoint = (

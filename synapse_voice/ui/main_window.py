@@ -771,8 +771,16 @@ class MainWindow(QMainWindow):
             text = entry.get("text", "")
             ts = entry.get("ts", "")
             mode = entry.get("mode", "")
+            # v0.9.11: surface which tier the server actually used
+            # (instant / fast / quality) inline on the row so the user
+            # can sanity-check Auto-routing without opening dev tools.
+            tier = (entry.get("quality_mode") or "").strip()
+            tier_badge = ""
+            if tier and mode != "local":
+                tier_emoji = {"instant": "⚡", "fast": "⚡", "quality": "✦"}.get(tier, "·")
+                tier_badge = f" {tier_emoji} {tier}"
             line1 = text if len(text) <= 100 else text[:97] + "…"
-            label = f"{line1}\n{ts} · {mode}"
+            label = f"{line1}\n{ts} · {mode}{tier_badge}"
             it = QListWidgetItem(label)
             self.history_list.addItem(it)
 

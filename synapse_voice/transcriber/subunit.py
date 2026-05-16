@@ -38,14 +38,18 @@ class SubunitTranscriber:
         # legacy X-API-Key. The transcribe-server will accept either
         # during the migration window.
         self.bearer_token = bearer_token
-        # 2026-05-16: "auto" / "quality" / "fast". Sent as a form field;
-        # server falls back to its default if it doesn't recognise the
-        # value (older transcribe-server builds).
+        # 2026-05-16: "auto" / "quality" / "fast" / "instant". Sent as a
+        # form field; server falls back to its default if it doesn't
+        # recognise the value (older transcribe-server builds).
         self.quality_mode = (quality_mode or "auto").lower()
         # Set by base.get_transcriber() from the user's vocab list. Mirrors
         # the cloud + local providers so Whisper biases toward custom names
         # / jargon on the Subunit backend too.
         self.initial_prompt: str = ""
+        # v0.9.11: surface which tier actually ran for the last call so
+        # callers (history recording) can show the badge in the UI.
+        # Populated from the server's `quality_mode` response field.
+        self.last_quality_mode: str = ""
 
     def transcribe(self, audio: np.ndarray, language: str = "de") -> str:
         if audio.size == 0:
@@ -80,6 +84,10 @@ class SubunitTranscriber:
         except requests.RequestException as e:
             raise TranscriberError(f"Subunit request failed: {e}") from e
         try:
-            return r.json().get("text", "").strip()
+            payload = r.json()
         except ValueError as e:
             raise TranscriberError(f"Subunit non-JSON: {r.text[:200]}") from e
+        # Stash the effective tier (useful when quality_mode was "auto"
+        # and the server picked instant/fast/quality based on duration).
+        self.last_quality_mode = str(payload.get("quality_mode", "") or "")
+        return (payload.get("text", "") or "").strip()
