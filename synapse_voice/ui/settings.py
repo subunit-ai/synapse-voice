@@ -680,23 +680,27 @@ class SettingsDialog(QDialog):
             self.local_model_combo.setCurrentIndex(idx)
 
     def _build_subunit_panel(self) -> None:
+        # v0.9.15: the legacy Endpoint + API-Key inputs were removed.
+        # Subunit auth runs entirely on the Bearer-token path now (sign in
+        # via the Account tab). Endpoint stays in config — it's pinned to
+        # the production server and the field added nothing but confusion
+        # for users who already signed in with their account.
         panel = QWidget()
         panel.setObjectName("tabPage")
         f = QFormLayout(panel)
         f.setContentsMargins(0, 0, 0, 0)
         f.setSpacing(10)
 
+        # Hidden — still tracked by Settings save/apply so a user who
+        # downgrades doesn't lose a previously-entered key.
         self.subunit_endpoint_edit = QLineEdit(self.config.subunit_endpoint)
-        self.subunit_endpoint_edit.setPlaceholderText("https://transcribe.subunit.ai/v1/transcribe")
-        f.addRow("Endpoint", self.subunit_endpoint_edit)
-
+        self.subunit_endpoint_edit.setVisible(False)
         self.subunit_key_edit = QLineEdit(self.config.subunit_api_key)
-        self.subunit_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.subunit_key_edit.setPlaceholderText("sk-svc-... (provided by subunit)")
-        f.addRow("API key", self.subunit_key_edit)
+        self.subunit_key_edit.setVisible(False)
 
         f.addRow("", _hint(
-            "Premium DSGVO-compliant transcription on the subunit-server."
+            "Premium DSGVO-konforme Transkription auf dem Subunit-Server. "
+            "Anmelden im Tab \"Account\" — kein API-Key mehr nötig."
         ))
         self.provider_stack.addWidget(panel)
         self._panel_index["subunit"] = 1

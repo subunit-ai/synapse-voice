@@ -649,11 +649,37 @@ class SynapseVoiceApp(QObject):
     def _on_transcribe_done(self, text: str, quality_mode: str = "") -> None:
         text = (text or "").strip()
         if not text:
+            # v0.9.15: empty transcription is the #1 silent-fail mode the
+            # user perceives as "nothing happened". Server-side VAD filter
+            # rejects clips below the speech threshold. Surface a real
+            # Windows tray balloon (not just the orb flash, which Erik on
+            # Win-ARM tablet doesn't always notice) AND log the duration.
+            duration_s = float(getattr(self, "_last_audio_seconds", 0.0) or 0.0)
+            _log.warning(
+                "Empty transcription returned (mode=%s, duration=%.1fs). "
+                "Common causes: mic level too low, audio shorter than VAD "
+                "threshold, background-only clip.",
+                self.config.mode, duration_s,
+            )
             self.tray.set_state("idle", "idle (empty)")
             if self.orb is None:
-                self.bubble.show_state("error", "empty transcription", auto_hide_ms=2500)
+                self.bubble.show_state(
+                    "error",
+                    "Keine Sprache erkannt — Mic-Level prüfen",
+                    auto_hide_ms=3500,
+                )
             else:
                 self.orb.show_state("error")
+            try:
+                self.tray.showMessage(
+                    "Sonar — keine Sprache erkannt",
+                    f"Aufnahme war leer ({duration_s:.1f}s). Mikrofon-Level "
+                    "und Eingabegerät in Settings prüfen.",
+                    msecs=4500,
+                )
+                self._last_tray_balloon_was_update = False
+            except Exception:
+                pass
             return
         if self.config.autopaste:
             # Hide the bubble BEFORE paste so it doesn't steal focus from the
