@@ -9,6 +9,55 @@ CONFIG_DIR = Path.home() / ".config" / "synapse-voice"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 
+# v0.9.17: Baseline DACH vocabulary shipped from day 1 so Whisper biases
+# toward the correct spellings of the brand + recurring tech words. The
+# `sounds_like` strings cover Whisper's most common mishears (TJ + Erik
+# logs: "Inzin"→"Instant", "Sun-Art"→"Sonar", "transkri**vie**ren"→
+# "transkribieren"). User can edit / delete any of these in Settings →
+# Vocabulary; the seeding only happens once, gated by
+# `vocabulary_default_seeded` so deletions stick.
+DEFAULT_VOCABULARY: list[dict] = [
+    # Brand / product names
+    {"sounds_like": "Sun-Art",   "write_as": "Sonar",
+     "aliases": ["Sonnar", "Sonnar.", "Sonar."], "category": "Company"},
+    {"sounds_like": "Sub-Unit",  "write_as": "Subunit",
+     "aliases": ["Subunit.", "Sub unit", "Subnit", "Subunit AI"], "category": "Company"},
+    {"sounds_like": "Synaps",    "write_as": "Synapse",
+     "aliases": ["Synaps."], "category": "Company"},
+    {"sounds_like": "Es-Enn-I",  "write_as": "SNI",
+     "aliases": ["S N I"], "category": "Tech"},
+    {"sounds_like": "Higgs Field", "write_as": "Higgsfield",
+     "aliases": ["Higs Field", "Higsfield"], "category": "Company"},
+
+    # Tech terms Whisper consistently mangles in German
+    {"sounds_like": "Instant",   "write_as": "Instant",
+     "aliases": ["Inzin", "Insent", "Instent", "Instand"], "category": "Tech"},
+    {"sounds_like": "transkrivieren", "write_as": "transkribieren",
+     "aliases": ["transkriebieren", "transkrieben", "transkrivieren"],
+     "category": "Tech"},
+    {"sounds_like": "transkriviert", "write_as": "transkribiert",
+     "aliases": ["transkrieviert", "transkriebiert"], "category": "Tech"},
+    {"sounds_like": "Whisper",   "write_as": "Whisper",
+     "aliases": ["Wisper", "Visper"], "category": "Tech"},
+    {"sounds_like": "Klaud",     "write_as": "Claude",
+     "aliases": ["Cloud" "Klod", "Klode"], "category": "Tech"},
+    {"sounds_like": "Antropik",  "write_as": "Anthropic",
+     "aliases": ["Antrobik"], "category": "Company"},
+    {"sounds_like": "Open-AI",   "write_as": "OpenAI",
+     "aliases": ["Open A I", "Openei"], "category": "Company"},
+    {"sounds_like": "Em-Ce-Pe",  "write_as": "MCP",
+     "aliases": ["M C P", "M.C.P."], "category": "Tech"},
+    {"sounds_like": "DSGVO",     "write_as": "DSGVO",
+     "aliases": ["D S G V O", "D.S.G.V.O."], "category": "Tech"},
+
+    # People recurring in workflow
+    {"sounds_like": "Erik",      "write_as": "Erik",
+     "aliases": ["Eric"], "category": "Person"},
+    {"sounds_like": "Te-Je",     "write_as": "TJ",
+     "aliases": ["T J", "T.J.", "Tee Jay"], "category": "Person"},
+]
+
+
 @dataclass
 class Config:
     hotkey: str = "<ctrl>+<space>"
@@ -72,6 +121,11 @@ class Config:
     # second variant. 1.0 = legacy default (~132px window), 1.5/2.0/3.0
     # bumps both the visible dot and its hit-area proportionally.
     orb_overlay_size: float = 1.0  # 0.5 .. 3.0
+    # v0.9.17 (TJ): hide the overlay entirely while idle — surface it
+    # only while the user is actively recording. Off by default to keep
+    # the existing always-visible behaviour for users who rely on the
+    # orb as a "the app is alive" indicator.
+    orb_overlay_auto_hide: bool = False
 
     # v0.8.0 (Codex Top 1): Speaker diarization for long-form recordings.
     # Server-side via transcribe.subunit.ai /v1/diarize — bundles the
@@ -196,6 +250,9 @@ class Config:
     # Old entries without these fields keep working — they're migrated
     # to category="Other"/aliases=[] on first read.
     vocabulary: list[dict] = field(default_factory=list)
+    # v0.9.17: marker so the default DACH brand+tech vocabulary is seeded
+    # only ONCE — re-running app shouldn't re-add terms the user deleted.
+    vocabulary_default_seeded: bool = False
 
     # v0.9.12: DACH Formatting Pack. Post-process pass that fixes German
     # abbreviation spacing, currency phrases, punctuation spacing and
@@ -215,9 +272,29 @@ class Config:
     total_audio_seconds: float = 0.0
 
     @classmethod
+    def _seed_default_vocabulary(self) -> None:
+        """v0.9.17: append baseline DACH terms to the user's vocabulary
+        if we haven't already done so. Idempotent — toggling the flag
+        on the existing entries prevents re-seeding after deletion."""
+        if getattr(self, "vocabulary_default_seeded", False):
+            return
+        existing = {(e.get("write_as") or "").strip().lower()
+                    for e in (self.vocabulary or []) if isinstance(e, dict)}
+        if not isinstance(self.vocabulary, list):
+            self.vocabulary = []
+        for entry in DEFAULT_VOCABULARY:
+            canon = entry.get("write_as", "").strip().lower()
+            if canon and canon not in existing:
+                # Copy so later edits to one don't mutate the constant.
+                self.vocabulary.append(dict(entry))
+                existing.add(canon)
+        self.vocabulary_default_seeded = True
+
+    @classmethod
     def load(cls) -> "Config":
         if not CONFIG_FILE.exists():
             cfg = cls()
+            cfg._seed_default_vocabulary()
             cfg.save()
             return cfg
         try:

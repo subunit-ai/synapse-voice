@@ -1155,6 +1155,17 @@ class SettingsDialog(QDialog):
 
         layout.addSpacing(6)
         layout.addWidget(_section_title("Idle behaviour"))
+        # v0.9.17 (TJ): auto-hide the overlay completely while idle —
+        # most users only want to see it during actual dictations.
+        self.row_orb_auto_hide = _ToggleRow(
+            "Nur bei Aufnahme anzeigen",
+            "Versteckt das Overlay komplett wenn keine Aufnahme läuft. "
+            "Erscheint nur kurz beim Hotkey-Druck und verschwindet wieder "
+            "nach dem Transkriptionsergebnis.",
+            getattr(self.config, "orb_overlay_auto_hide", False),
+        )
+        layout.addWidget(self.row_orb_auto_hide)
+
         self.row_orb_pulse = _ToggleRow(
             "Subtle breathing pulse when idle",
             "Slow halo pulse signals the app is alive. Disable for a "
@@ -1824,6 +1835,8 @@ class SettingsDialog(QDialog):
                 config.orb_overlay_size = float(self.orb_size_combo.currentData() or 1.0)
             except (TypeError, ValueError):
                 config.orb_overlay_size = 1.0
+        if hasattr(self, "row_orb_auto_hide"):
+            config.orb_overlay_auto_hide = self.row_orb_auto_hide.is_on()
         config.orb_idle_pulse = self.row_orb_pulse.is_on()
         config.recording_mode = self.recording_mode_combo.currentData() or "toggle"
         config.mic_device_name = self.mic_combo.currentData() or ""

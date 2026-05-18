@@ -456,7 +456,9 @@ class SynapseVoiceApp(QObject):
         if self.config.use_orb_overlay:
             self.orb = OrbOverlay(self.config, on_change_mode=self.change_mode)
             self.orb.set_level_provider(lambda: self.recorder.level)
-            self.orb.show()
+            # v0.9.17: respect auto-hide — start invisible, surface only on recording.
+            if not getattr(self.config, "orb_overlay_auto_hide", False):
+                self.orb.show()
         self.main_window = MainWindow(
             config=self.config,
             on_change_mode=self.change_mode,
@@ -967,7 +969,9 @@ class SynapseVoiceApp(QObject):
         if self.config.use_orb_overlay:
             self.orb = OrbOverlay(self.config, on_change_mode=self.change_mode)
             self.orb.set_level_provider(lambda: self.recorder.level)
-            self.orb.show()
+            # v0.9.17: respect auto-hide — start invisible, surface only on recording.
+            if not getattr(self.config, "orb_overlay_auto_hide", False):
+                self.orb.show()
 
     def _prompt_for_credentials(self, message: str) -> None:
         from PyQt6.QtWidgets import QMessageBox

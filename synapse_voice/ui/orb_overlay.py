@@ -174,6 +174,10 @@ class OrbOverlay(QWidget):
         if self._state == from_state:
             self._state = "idle"
             self.update()
+            # v0.9.17: auto-hide → fully disappear once the post-recording
+            # "done" / "error" flash is over.
+            if getattr(self.config, "orb_overlay_auto_hide", False):
+                self.hide()
 
     # ── Geometry / placement ───────────────────────────────────────────────
 
