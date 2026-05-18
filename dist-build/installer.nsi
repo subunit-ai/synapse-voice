@@ -120,6 +120,20 @@ Section "Start with Windows" SecAutostart
   WriteRegStr HKCU "${APP_RUNKEY}" "${APP_NAME}" "$INSTDIR\${APP_EXEC}"
 SectionEnd
 
+; v0.10.3: silent-install re-launch.
+; When the Sonar auto-updater runs us with /S there's no Finish page
+; and MUI_FINISHPAGE_RUN never fires — the app would stay quit until
+; the user clicked the Start Menu shortcut. .onInstSuccess fires for
+; both silent and interactive installs, so we use it to re-launch
+; the app whenever an auto-update completes. ShellExecute breaks the
+; admin-token chain so the launched app runs as the user, not as
+; admin (we don't want the user's everyday Sonar session running
+; elevated).
+Function .onInstSuccess
+  IfSilent 0 +2
+    Exec '"$INSTDIR\${APP_EXEC}"'
+FunctionEnd
+
 LangString DESC_SecCore      ${LANG_ENGLISH} "Core application files (required)."
 LangString DESC_SecAutostart ${LANG_ENGLISH} "Launch ${APP_NAME} automatically when you sign into Windows."
 LangString DESC_SecCore      ${LANG_GERMAN}  "Programmdateien (erforderlich)."

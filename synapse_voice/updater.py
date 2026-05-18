@@ -25,7 +25,7 @@ from .logger import get as _get_logger
 
 _log = _get_logger(__name__)
 
-GITHUB_LATEST = "https://api.github.com/repos/subunit-ai/synapse-voice/releases/latest"
+GITHUB_LATEST = "https://api.github.com/repos/subunit-ai/sonar/releases/latest"
 
 
 @dataclass
@@ -397,18 +397,21 @@ def launch_installer_and_quit(installer: Path) -> None:
     if sys.platform == "win32":
         import ctypes
 
-        SW_SHOWNORMAL = 1
-        _log.info("Launching installer (UAC): %s", installer)
-        # ShellExecuteW returns an HINSTANCE; >32 means success. Lower
-        # values are error codes (5 = access denied, 31 = no app
-        # associated, etc).
+        # v0.10.3: NSIS /S = silent install. The installer's
+        # `.onInstSuccess` hook re-launches the new exe after files
+        # are written, so the user sees: brief UAC prompt → app
+        # quits → ~5s later new version pops back up. No installer
+        # window. (TJ: "er soll das am besten direkt intern direkt
+        # updaten und dann die App neu starten".)
+        SW_HIDE = 0
+        _log.info("Launching installer silently (UAC): %s", installer)
         rc = ctypes.windll.shell32.ShellExecuteW(
             None,
             "runas",
             str(installer),
+            "/S",
             None,
-            None,
-            SW_SHOWNORMAL,
+            SW_HIDE,
         )
         if rc <= 32:
             # Fall back to a non-elevated run — works for users who tweaked
@@ -422,7 +425,7 @@ def launch_installer_and_quit(installer: Path) -> None:
             DETACHED_PROCESS = 0x00000008
             CREATE_NEW_PROCESS_GROUP = 0x00000200
             subprocess.Popen(
-                [str(installer)],
+                [str(installer), "/S"],
                 close_fds=True,
                 creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
             )
