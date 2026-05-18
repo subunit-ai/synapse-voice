@@ -146,7 +146,7 @@ jobs:
           if (-not (Test-Path $nsis)) { $nsis = "makensis.exe" }
           & $nsis "/DAPP_VERSION=${{ steps.ver.outputs.version }}" dist-build\installer.nsi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-ChildItem dist\SynapseVoice-Setup-*.exe
+          Get-ChildItem dist\Sonar-Setup-*.exe
         shell: pwsh
 
       - name: Upload Windows artefacts
@@ -155,7 +155,7 @@ jobs:
           name: windows-x86_64
           path: |
             dist\synapse-voice-windows-x86_64.zip
-            dist\SynapseVoice-Setup-*.exe
+            dist\Sonar-Setup-*.exe
           if-no-files-found: error
 
   build-windows-arm64:
@@ -244,7 +244,7 @@ jobs:
           if (-not (Test-Path $nsis)) { $nsis = "makensis.exe" }
           & $nsis "/DAPP_VERSION=${{ steps.ver.outputs.version }}" "/DARCH_SUFFIX=-arm64" dist-build\installer.nsi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-ChildItem dist\SynapseVoice-Setup-*-arm64.exe
+          Get-ChildItem dist\Sonar-Setup-*-arm64.exe
         shell: pwsh
 
       - name: Upload Windows ARM64 artefacts
@@ -253,7 +253,7 @@ jobs:
           name: windows-arm64
           path: |
             dist\synapse-voice-windows-arm64.zip
-            dist\SynapseVoice-Setup-*-arm64.exe
+            dist\Sonar-Setup-*-arm64.exe
           if-no-files-found: error
 
   build-macos-arm64:
@@ -382,9 +382,9 @@ jobs:
               artefacts/linux-x86_64/synapse-voice-linux-x86_64.tar.gz \
               artefacts/linux-x86_64/SynapseVoice-x86_64.AppImage \
               artefacts/windows-x86_64/synapse-voice-windows-x86_64.zip \
-              artefacts/windows-x86_64/SynapseVoice-Setup-*.exe \
+              artefacts/windows-x86_64/Sonar-Setup-*.exe \
               artefacts/windows-arm64/synapse-voice-windows-arm64.zip \
-              artefacts/windows-arm64/SynapseVoice-Setup-*-arm64.exe \
+              artefacts/windows-arm64/Sonar-Setup-*-arm64.exe \
               artefacts/macos-arm64/Sonar-*-arm64.dmg \
               artefacts/macos-arm64/synapse-voice-macos-arm64.zip; do
               if [ -f "$f" ]; then
@@ -408,8 +408,8 @@ jobs:
             artefacts/linux-x86_64/synapse-voice-linux-x86_64.tar.gz
             artefacts/linux-x86_64/SynapseVoice-x86_64.AppImage
             artefacts/windows-x86_64/synapse-voice-windows-x86_64.zip
-            artefacts/windows-x86_64/SynapseVoice-Setup-*.exe
+            artefacts/windows-x86_64/Sonar-Setup-*.exe
             artefacts/windows-arm64/synapse-voice-windows-arm64.zip
-            artefacts/windows-arm64/SynapseVoice-Setup-*-arm64.exe
+            artefacts/windows-arm64/Sonar-Setup-*-arm64.exe
             artefacts/macos-arm64/Sonar-*-arm64.dmg
             artefacts/macos-arm64/synapse-voice-macos-arm64.zip
