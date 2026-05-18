@@ -219,6 +219,13 @@ class OrbOverlay(QWidget):
     # ── Tick / state animation ─────────────────────────────────────────────
 
     def _on_tick(self) -> None:
+        # v0.10.4: Win-ARM perf — skip the entire tick when the orb is
+        # hidden (auto_hide mode) AND we're idle. There's nothing on
+        # screen to repaint and no level worth sampling. Saves the
+        # 30Hz idle work that was contributing to Erik's "buggy/slow"
+        # feel on the tablet.
+        if not self.isVisible() and self._state == "idle":
+            return
         self._pulse_phase += 0.06
         # v0.9.16: only sample the mic level when actively recording.
         # The recorder reads the input device continuously for hotkey

@@ -122,82 +122,93 @@ class Hub(QMainWindow):
         self.plan_badge = self.header.plan_badge
 
         # Periodic stat refresh — Home reads transcription totals from
-        # Config which mutates after every dictation.
+        # Config which mutates after every dictation. main.py also
+        # explicitly calls self.main_window.refresh() after each one, so
+        # this timer is just a safety net for state that mutates outside
+        # the main flow (e.g. config reload). v0.10.4: bumped 1.5s → 5s
+        # to cut Win-ARM background work; the explicit post-transcribe
+        # call covers the responsiveness path.
         self._refresh_timer = QTimer(self)
-        self._refresh_timer.setInterval(1500)
+        self._refresh_timer.setInterval(5000)
         self._refresh_timer.timeout.connect(self.refresh)
         self._refresh_timer.start()
 
     # ── sections ────────────────────────────────────────────────────────
     def _build_sections(self) -> None:
+        """v0.10.4: lazy section construction. Only Home is built upfront
+        so the Hub paints in <500ms on Win-ARM tablets. Every other
+        section is built the first time the user clicks its sidebar
+        button — saves both startup time AND memory (the SettingsDialog
+        host alone is a ~900-line widget tree that previously loaded
+        whether the user touched it or not)."""
         self._sections["home"] = HomeSection(
             self.config,
             on_start_meeting=self._on_start_meeting,
             on_nav=self.sidebar.select,
         )
-        # v0.10.1 Phase 3: real inline sections. Each one falls back to
-        # a placeholder + legacy-dialog CTA if its build raises.
-        try:
-            self._sections["history"] = HistorySection(self.config, on_repaste=self._on_repaste)
-        except Exception:
-            self._sections["history"] = PlaceholderSection(
-                "Verlauf",
-                "Verlauf konnte nicht inline geladen werden.",
-                cta_label="Verlauf öffnen",
-                cta_callback=self._on_open_history,
-            )
-
-        try:
-            self._sections["meetings"] = MeetingsSection(self.config)
-        except Exception:
-            meetings_cb = self._on_open_meetings or (lambda: None)
-            self._sections["meetings"] = PlaceholderSection(
-                "Meetings",
-                "Meetings konnten nicht inline geladen werden.",
-                cta_label="Meetings öffnen",
-                cta_callback=meetings_cb,
-            )
-
-        try:
-            self._sections["vocabulary"] = VocabularySection(self.config, on_apply=self.refresh_mode)
-        except Exception:
-            self._sections["vocabulary"] = PlaceholderSection(
-                "Vocabulary",
-                "Vocabulary konnte nicht inline geladen werden.",
-                cta_label="Settings → Vocabulary öffnen",
-                cta_callback=self._on_open_settings,
-            )
-        try:
-            # v0.10.0 Phase 2: inline Settings section.
-            self._sections["settings"] = SettingsSection(
-                self.config,
-                on_apply=self.refresh_mode,
-            )
-        except Exception:
-            # If lifting the legacy panels fails for any reason, fall back
-            # to opening the legacy dialog so the user can still configure
-            # the app — don't strand them on a broken screen.
-            self._sections["settings"] = PlaceholderSection(
-                "Settings",
-                "Inline-Settings konnten nicht geladen werden. Bis zum "
-                "Hotfix öffnet der klassische Settings-Dialog.",
-                cta_label="Settings öffnen",
-                cta_callback=self._on_open_settings,
-            )
-        self._sections["help"] = PlaceholderSection(
-            "Hilfe",
-            "Doku, Diagnose und Lizenzhinweise — kommt in Phase 3.",
-        )
-
-        for key, widget in self._sections.items():
-            self.content.addWidget(widget)
-
+        self.content.addWidget(self._sections["home"])
         self.content.setCurrentWidget(self._sections["home"])
+
+    def _build_section_on_demand(self, key: str) -> QWidget:
+        """Construct + cache a Hub section the first time the user
+        navigates to it. Falls back to PlaceholderSection if the
+        section's inline build raises."""
+        if key == "history":
+            try:
+                return HistorySection(self.config, on_repaste=self._on_repaste)
+            except Exception:
+                return PlaceholderSection(
+                    "Verlauf",
+                    "Verlauf konnte nicht inline geladen werden.",
+                    cta_label="Verlauf öffnen",
+                    cta_callback=self._on_open_history,
+                )
+        if key == "meetings":
+            try:
+                return MeetingsSection(self.config)
+            except Exception:
+                meetings_cb = self._on_open_meetings or (lambda: None)
+                return PlaceholderSection(
+                    "Meetings",
+                    "Meetings konnten nicht inline geladen werden.",
+                    cta_label="Meetings öffnen",
+                    cta_callback=meetings_cb,
+                )
+        if key == "vocabulary":
+            try:
+                return VocabularySection(self.config, on_apply=self.refresh_mode)
+            except Exception:
+                return PlaceholderSection(
+                    "Vocabulary",
+                    "Vocabulary konnte nicht inline geladen werden.",
+                    cta_label="Settings → Vocabulary öffnen",
+                    cta_callback=self._on_open_settings,
+                )
+        if key == "settings":
+            try:
+                return SettingsSection(self.config, on_apply=self.refresh_mode)
+            except Exception:
+                return PlaceholderSection(
+                    "Settings",
+                    "Inline-Settings konnten nicht geladen werden.",
+                    cta_label="Settings öffnen",
+                    cta_callback=self._on_open_settings,
+                )
+        if key == "help":
+            return PlaceholderSection(
+                "Hilfe",
+                "Doku, Diagnose und Lizenzhinweise — kommt in Phase 4.",
+            )
+        # Unknown key → blank placeholder.
+        return PlaceholderSection("(unbekannt)", "Sektion nicht definiert.")
 
     def _on_section_changed(self, key: str) -> None:
         widget = self._sections.get(key)
-        if widget is not None:
-            self.content.setCurrentWidget(widget)
+        if widget is None:
+            widget = self._build_section_on_demand(key)
+            self._sections[key] = widget
+            self.content.addWidget(widget)
+        self.content.setCurrentWidget(widget)
 
     # ── public API (mirrors legacy MainWindow surface) ──────────────────
     def refresh(self) -> None:
