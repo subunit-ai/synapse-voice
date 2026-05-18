@@ -67,6 +67,11 @@ class Config:
     #   "wave"    — horizontal sine waveform
     #   "classic" — minimal cyan dot (Bubble-era throwback)
     orb_overlay_style: str = "sphere"
+    # v0.9.16 (TJ-feedback): scale multiplier for the orb overlay so
+    # users on hi-DPI tablets can size it up without us hardcoding a
+    # second variant. 1.0 = legacy default (~132px window), 1.5/2.0/3.0
+    # bumps both the visible dot and its hit-area proportionally.
+    orb_overlay_size: float = 1.0  # 0.5 .. 3.0
 
     # v0.8.0 (Codex Top 1): Speaker diarization for long-form recordings.
     # Server-side via transcribe.subunit.ai /v1/diarize — bundles the

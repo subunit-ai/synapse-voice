@@ -64,24 +64,33 @@ class OrbOverlay(QWidget):
     get unclickable.
     """
 
-    DOT_RADIUS = 14            # the visible orb itself (~28px diameter)
-    # v0.5.11 (TJ-feedback): satellites were "very tiny", make them the
-    # same size as the main dot since they only appear on hover/click
-    # anyway — no clutter risk, and clicking 28px targets is much
-    # easier than 18px ones (esp. on touch + Win-on-ARM tablets).
-    SAT_RADIUS = 14            # was 9; matches DOT_RADIUS now
-    # Bigger satellites need more breathing room from the orb center,
-    # otherwise they kiss the orb edge.  Push them out enough to leave
-    # a small visible gap.
-    SAT_DISTANCE = 34          # was 26
-    # And the window needs more padding so the satellites + halo fit.
-    PADDING = 52               # was 38
+    # Baseline geometry (multiplied by config.orb_overlay_size in __init__).
+    BASE_DOT_RADIUS = 14       # ~28px diameter at 1.0x
+    BASE_SAT_RADIUS = 14       # matches DOT_RADIUS
+    BASE_SAT_DISTANCE = 34
+    BASE_PADDING = 52
+    # Instance-resolved fields populated in __init__ from the BASE_* values
+    # × config.orb_overlay_size. Kept as class attributes too so paint
+    # helpers that read e.g. self.DOT_RADIUS still work without changes.
+    DOT_RADIUS = BASE_DOT_RADIUS
+    SAT_RADIUS = BASE_SAT_RADIUS
+    SAT_DISTANCE = BASE_SAT_DISTANCE
+    PADDING = BASE_PADDING
 
     def __init__(self, config: Config, on_change_mode: Callable[[str], None]) -> None:
         super().__init__()
         self.config = config
         self._on_change_mode = on_change_mode
         self._level_provider: Optional[Callable[[], float]] = None
+        # v0.9.16: scale every geometry constant by the user-configured
+        # multiplier. Setting them on the instance shadows the class
+        # attribute so existing paint helpers (which read self.DOT_RADIUS
+        # etc.) pick up the scaled values without changes.
+        scale = max(0.5, min(3.0, float(getattr(config, "orb_overlay_size", 1.0) or 1.0)))
+        self.DOT_RADIUS = max(8, int(round(self.BASE_DOT_RADIUS * scale)))
+        self.SAT_RADIUS = max(6, int(round(self.BASE_SAT_RADIUS * scale)))
+        self.SAT_DISTANCE = max(18, int(round(self.BASE_SAT_DISTANCE * scale)))
+        self.PADDING = max(28, int(round(self.BASE_PADDING * scale)))
         self._state = "idle"
         self._pulse_phase = 0.0
         self._level = 0.0
@@ -207,11 +216,20 @@ class OrbOverlay(QWidget):
 
     def _on_tick(self) -> None:
         self._pulse_phase += 0.06
-        if self._level_provider is not None:
+        # v0.9.16: only sample the mic level when actively recording.
+        # The recorder reads the input device continuously for hotkey
+        # detection, so reading .level outside a recording window made
+        # the bars/halo pulse on ambient noise even when the user wasn't
+        # dictating — Erik on Win-ARM perceived it as "the orb reacts
+        # to anything I say". Gating here keeps idle motion limited to
+        # the existing breathing animation.
+        if self._state == "recording" and self._level_provider is not None:
             try:
                 self._level = float(self._level_provider())
             except Exception:
                 self._level = 0.0
+        else:
+            self._level = 0.0
         self._level_smooth += (self._level - self._level_smooth) * 0.3
 
         # Fade satellites in/out smoothly when hover state changes

@@ -1131,6 +1131,29 @@ class SettingsDialog(QDialog):
         ))
 
         layout.addSpacing(6)
+        layout.addWidget(_section_title("Size"))
+        self.orb_size_combo = QComboBox()
+        # v0.9.16: tablet users (Erik on Win-ARM Surface) wanted the orb
+        # bigger because the 1.0x default is too easy to lose on hi-DPI
+        # screens. Picker not slider — fewer choices keeps the UX tight.
+        self.orb_size_combo.addItem("Small (1.0×, default)", 1.0)
+        self.orb_size_combo.addItem("Medium (1.5×)", 1.5)
+        self.orb_size_combo.addItem("Large (2.0×)", 2.0)
+        self.orb_size_combo.addItem("Tablet (2.5×)", 2.5)
+        self.orb_size_combo.addItem("XL (3.0×)", 3.0)
+        cur_size = float(getattr(self.config, "orb_overlay_size", 1.0) or 1.0)
+        # Pick the closest configured size so an old value lands on a sensible
+        # option even if it doesn't match exactly.
+        best_idx = 0
+        best_diff = abs(self.orb_size_combo.itemData(0) - cur_size)
+        for i in range(1, self.orb_size_combo.count()):
+            d = abs(self.orb_size_combo.itemData(i) - cur_size)
+            if d < best_diff:
+                best_diff, best_idx = d, i
+        self.orb_size_combo.setCurrentIndex(best_idx)
+        layout.addWidget(self.orb_size_combo)
+
+        layout.addSpacing(6)
         layout.addWidget(_section_title("Idle behaviour"))
         self.row_orb_pulse = _ToggleRow(
             "Subtle breathing pulse when idle",
@@ -1796,6 +1819,11 @@ class SettingsDialog(QDialog):
             self.orb_style_combo.currentData() if hasattr(self, "orb_style_combo") else "sphere"
         ) or "sphere"
         config.orb_position = self.orb_position_combo.currentData() or "bottom-center"
+        if hasattr(self, "orb_size_combo"):
+            try:
+                config.orb_overlay_size = float(self.orb_size_combo.currentData() or 1.0)
+            except (TypeError, ValueError):
+                config.orb_overlay_size = 1.0
         config.orb_idle_pulse = self.row_orb_pulse.is_on()
         config.recording_mode = self.recording_mode_combo.currentData() or "toggle"
         config.mic_device_name = self.mic_combo.currentData() or ""
