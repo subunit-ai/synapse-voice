@@ -20,6 +20,7 @@ from .transcriber import TranscriberError, get_transcriber
 from .ui.bubble import Bubble
 from .ui.orb_overlay import OrbOverlay
 from .ui.history import HistoryDialog
+from .ui.hub import Hub
 from .ui.main_window import MainWindow
 from .ui.settings import SettingsDialog
 from .ui.tray import Tray
@@ -459,15 +460,29 @@ class SynapseVoiceApp(QObject):
             # v0.9.17: respect auto-hide — start invisible, surface only on recording.
             if not getattr(self.config, "orb_overlay_auto_hide", False):
                 self.orb.show()
-        self.main_window = MainWindow(
-            config=self.config,
-            on_change_mode=self.change_mode,
-            on_open_settings=self.open_settings,
-            on_open_history=self.open_history,
-            on_open_meetings=self.open_meetings,
-            on_start_meeting=self.start_meeting,
-            on_quit=self.quit,
-        )
+        # v0.10.0: Hub is the new single-window UI. Legacy MainWindow
+        # stays available behind `use_legacy_main_window` config flag as
+        # an emergency-rollback path while Phase 2/3 sections land.
+        if getattr(self.config, "use_legacy_main_window", False):
+            self.main_window = MainWindow(
+                config=self.config,
+                on_change_mode=self.change_mode,
+                on_open_settings=self.open_settings,
+                on_open_history=self.open_history,
+                on_open_meetings=self.open_meetings,
+                on_start_meeting=self.start_meeting,
+                on_quit=self.quit,
+            )
+        else:
+            self.main_window = Hub(
+                config=self.config,
+                on_change_mode=self.change_mode,
+                on_open_settings=self.open_settings,
+                on_open_history=self.open_history,
+                on_open_meetings=self.open_meetings,
+                on_start_meeting=self.start_meeting,
+                on_quit=self.quit,
+            )
         self.tray = Tray(
             on_toggle_record=self.toggle_record,
             on_open_settings=self.open_settings,

@@ -126,6 +126,11 @@ class Config:
     # the existing always-visible behaviour for users who rely on the
     # orb as a "the app is alive" indicator.
     orb_overlay_auto_hide: bool = False
+    # v0.10.0: emergency-rollback flag — set to True to revive the
+    # legacy multi-window MainWindow + SettingsDialog layout in case
+    # the new Hub UI hits a Win-ARM regression we can't reproduce
+    # locally. Default off so everyone gets the new shell.
+    use_legacy_main_window: bool = False
 
     # v0.8.0 (Codex Top 1): Speaker diarization for long-form recordings.
     # Server-side via transcribe.subunit.ai /v1/diarize — bundles the
