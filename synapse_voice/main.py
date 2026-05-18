@@ -482,6 +482,7 @@ class SynapseVoiceApp(QObject):
                 on_open_meetings=self.open_meetings,
                 on_start_meeting=self.start_meeting,
                 on_quit=self.quit,
+                on_repaste=self._hub_repaste,
             )
         self.tray = Tray(
             on_toggle_record=self.toggle_record,
@@ -1083,15 +1084,18 @@ class SynapseVoiceApp(QObject):
         # automatically. Closing into nothing felt like the app crashed.
         QTimer.singleShot(150, self.open_window)
 
-    def open_history(self) -> None:
-        def repaste(text: str) -> None:
-            from .target_lock import set_clipboard
-            set_clipboard(text)
-            self.tray.showMessage(
-                "Sonar", "History entry copied to clipboard", msecs=1500
-            )
+    def _hub_repaste(self, text: str) -> None:
+        """Callback for the Hub's inline HistorySection. Mirrors the
+        legacy modal's repaste handler — copies the entry into the
+        clipboard and surfaces a tray toast so the user knows."""
+        from .target_lock import set_clipboard
+        set_clipboard(text)
+        self.tray.showMessage(
+            "Sonar", "History entry copied to clipboard", msecs=1500
+        )
 
-        dlg = HistoryDialog(self.config, on_repaste=repaste)
+    def open_history(self) -> None:
+        dlg = HistoryDialog(self.config, on_repaste=self._hub_repaste)
         dlg.exec()
 
     def open_meetings(self) -> None:

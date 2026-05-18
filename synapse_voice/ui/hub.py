@@ -39,9 +39,12 @@ from PyQt6.QtWidgets import (
 from ..config import Config
 from .hub_header import HubHeader
 from .hub_sidebar import HubSidebar
+from .sections.history import HistorySection
 from .sections.home import HomeSection
+from .sections.meetings import MeetingsSection
 from .sections.placeholder import PlaceholderSection
 from .sections.settings import SettingsSection
+from .sections.vocabulary import VocabularySection
 
 
 class Hub(QMainWindow):
@@ -56,6 +59,7 @@ class Hub(QMainWindow):
         on_open_meetings: Optional[Callable[[], None]] = None,
         on_start_meeting: Optional[Callable[[], None]] = None,
         on_quit: Optional[Callable[[], None]] = None,
+        on_repaste: Optional[Callable[[str], None]] = None,
     ) -> None:
         super().__init__()
         self.config = config
@@ -65,6 +69,7 @@ class Hub(QMainWindow):
         self._on_open_meetings = on_open_meetings
         self._on_start_meeting = on_start_meeting
         self._on_quit = on_quit
+        self._on_repaste = on_repaste or (lambda _text: None)
 
         self.setWindowTitle("Sonar")
         self.resize(1280, 800)
@@ -130,28 +135,38 @@ class Hub(QMainWindow):
             on_start_meeting=self._on_start_meeting,
             on_nav=self.sidebar.select,
         )
-        self._sections["history"] = PlaceholderSection(
-            "Verlauf",
-            "Inline-Verlauf kommt in v0.10.0 Phase 3 — bis dahin öffnet "
-            "der Verlauf im klassischen Fenster.",
-            cta_label="Verlauf öffnen",
-            cta_callback=self._on_open_history,
-        )
-        meetings_cb = self._on_open_meetings or (lambda: None)
-        self._sections["meetings"] = PlaceholderSection(
-            "Meetings",
-            "Inline-Meetings-Ansicht kommt in v0.10.0 Phase 3 — bis dahin "
-            "öffnen die Meeting-Notizen im klassischen Fenster.",
-            cta_label="Meetings öffnen",
-            cta_callback=meetings_cb,
-        )
-        self._sections["vocabulary"] = PlaceholderSection(
-            "Vocabulary",
-            "Die Vocabulary-Tabelle bekommt in Phase 3 eine eigene Sektion. "
-            "Aktuell ist sie im Settings-Dialog → Tab Vocabulary erreichbar.",
-            cta_label="Settings → Vocabulary öffnen",
-            cta_callback=self._on_open_settings,
-        )
+        # v0.10.1 Phase 3: real inline sections. Each one falls back to
+        # a placeholder + legacy-dialog CTA if its build raises.
+        try:
+            self._sections["history"] = HistorySection(self.config, on_repaste=self._on_repaste)
+        except Exception:
+            self._sections["history"] = PlaceholderSection(
+                "Verlauf",
+                "Verlauf konnte nicht inline geladen werden.",
+                cta_label="Verlauf öffnen",
+                cta_callback=self._on_open_history,
+            )
+
+        try:
+            self._sections["meetings"] = MeetingsSection(self.config)
+        except Exception:
+            meetings_cb = self._on_open_meetings or (lambda: None)
+            self._sections["meetings"] = PlaceholderSection(
+                "Meetings",
+                "Meetings konnten nicht inline geladen werden.",
+                cta_label="Meetings öffnen",
+                cta_callback=meetings_cb,
+            )
+
+        try:
+            self._sections["vocabulary"] = VocabularySection(self.config, on_apply=self.refresh_mode)
+        except Exception:
+            self._sections["vocabulary"] = PlaceholderSection(
+                "Vocabulary",
+                "Vocabulary konnte nicht inline geladen werden.",
+                cta_label="Settings → Vocabulary öffnen",
+                cta_callback=self._on_open_settings,
+            )
         try:
             # v0.10.0 Phase 2: inline Settings section.
             self._sections["settings"] = SettingsSection(

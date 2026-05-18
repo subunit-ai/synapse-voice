@@ -157,6 +157,9 @@ a = Analysis(
         "synapse_voice.ui.sections.placeholder",
         "synapse_voice.ui.sections.settings",
         "synapse_voice.ui.sections.embed",
+        "synapse_voice.ui.sections.history",
+        "synapse_voice.ui.sections.meetings",
+        "synapse_voice.ui.sections.vocabulary",
         # Local backend deps — only one of these two paths is installed
         # per architecture.  PyInstaller emits a warning for the absent
         # set; that's fine, the actual install handles arch-conditioning.
