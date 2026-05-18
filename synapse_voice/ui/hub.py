@@ -41,6 +41,7 @@ from .hub_header import HubHeader
 from .hub_sidebar import HubSidebar
 from .sections.home import HomeSection
 from .sections.placeholder import PlaceholderSection
+from .sections.settings import SettingsSection
 
 
 class Hub(QMainWindow):
@@ -151,13 +152,23 @@ class Hub(QMainWindow):
             cta_label="Settings → Vocabulary öffnen",
             cta_callback=self._on_open_settings,
         )
-        self._sections["settings"] = PlaceholderSection(
-            "Settings",
-            "Inline-Settings kommen in v0.10.0 Phase 2. Bis dahin öffnet "
-            "der klassische Settings-Dialog.",
-            cta_label="Settings öffnen",
-            cta_callback=self._on_open_settings,
-        )
+        try:
+            # v0.10.0 Phase 2: inline Settings section.
+            self._sections["settings"] = SettingsSection(
+                self.config,
+                on_apply=self.refresh_mode,
+            )
+        except Exception:
+            # If lifting the legacy panels fails for any reason, fall back
+            # to opening the legacy dialog so the user can still configure
+            # the app — don't strand them on a broken screen.
+            self._sections["settings"] = PlaceholderSection(
+                "Settings",
+                "Inline-Settings konnten nicht geladen werden. Bis zum "
+                "Hotfix öffnet der klassische Settings-Dialog.",
+                cta_label="Settings öffnen",
+                cta_callback=self._on_open_settings,
+            )
         self._sections["help"] = PlaceholderSection(
             "Hilfe",
             "Doku, Diagnose und Lizenzhinweise — kommt in Phase 3.",
