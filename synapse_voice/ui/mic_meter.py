@@ -48,11 +48,20 @@ class MicLevelMeter(QWidget):
         self._tick.timeout.connect(self._on_tick)
 
     def set_device(self, device_index: Optional[int]) -> None:
-        """Switch the sample-source. Pass None for system default."""
+        """Switch the sample-source. Pass None for system default.
+
+        v0.10.5: only restart the stream when the meter is visible. The
+        Hub instantiates the SettingsDialog invisibly (for the panel-
+        lifting trick), and the Settings General-tab calls set_device()
+        unconditionally at construction. Without this guard the mic
+        opens permanently the first time the user touches Settings or
+        Vocabulary — privacy + battery regression.
+        """
         if device_index == self._device and self._stream is not None:
             return
         self._device = device_index
-        self._restart_stream()
+        if self.isVisible():
+            self._restart_stream()
 
     def showEvent(self, e) -> None:
         super().showEvent(e)
