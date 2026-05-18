@@ -166,11 +166,14 @@ class Config:
     subunit_workspace_id: str = ""
 
     # 2026-05-16: Cloud-side Quality vs Fast vs Auto switch (Subunit provider).
-    # "auto"    → server picks Fast for <8s clips, Quality for longer (default)
+    # "auto"    → server picks instant (base) for <5s, fast (small) for <20s, quality otherwise
+    # "instant" → base (~12× faster, only good for one-word utterances)
+    # "fast"    → small (~4× faster, solid German)
     # "quality" → large-v3-turbo (best accuracy, slower)
-    # "fast"    → small (~4× faster, instant-paste feel on short clips)
-    # Persisted across launches; surfaced in the main-window detail card.
-    cloud_quality_mode: str = "auto"  # "auto" | "quality" | "fast"
+    # 2026-05-18: default reverted from "auto" → "quality" — auto's instant/fast
+    # tiers degraded German accuracy on Erik's typical dictations. Auto stays
+    # opt-in via the UI toggle for users who want speed on short clips.
+    cloud_quality_mode: str = "quality"  # "auto" | "instant" | "fast" | "quality"
 
     # v0.4: Subtle UI sounds — start ping on record, pop on done.
     sound_enabled: bool = True
@@ -228,6 +231,17 @@ class Config:
             # to the new default ("prompt") on load.
             if cfg.cleanup_style == "tidy":
                 cfg.cleanup_style = "prompt"
+                cfg.save()
+            # v0.9.14: cloud_quality_mode default reverted "auto" → "quality"
+            # because Auto's instant/fast tiers degraded German accuracy on
+            # short dictations. Anyone who never explicitly toggled (i.e. is
+            # carrying the old silent default) gets bumped back to "quality".
+            # Users who actually want Auto can re-pick it in the UI; the
+            # migration only runs once.
+            if not getattr(cfg, "cloud_quality_migrated_v0914", False):
+                if cfg.cloud_quality_mode in ("auto", ""):
+                    cfg.cloud_quality_mode = "quality"
+                cfg.cloud_quality_migrated_v0914 = True
                 cfg.save()
             # v0.9.12: backfill new Vocabulary v2 fields on legacy entries
             # so the rest of the app can rely on category/aliases existing.

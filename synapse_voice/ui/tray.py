@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Callable
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction, QActionGroup, QColor, QIcon, QPainter, QPixmap
+from PyQt6.QtGui import QAction, QActionGroup, QColor, QCursor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
 
 from .. import __version__
@@ -120,7 +120,10 @@ class Tray(QSystemTrayIcon):
             QSystemTrayIcon.ActivationReason.Trigger,
             QSystemTrayIcon.ActivationReason.MiddleClick,
         ):
-            self._menu.popup(self.geometry().center())
+            # v0.9.14: Win-ARM x64-emulation reported tray geometry as (0,0,0,0),
+            # which made popup() render an empty white frame. QCursor.pos() is
+            # always a valid screen coordinate regardless of platform.
+            self._menu.popup(QCursor.pos())
 
     def set_state(self, state: str, tooltip: str | None = None) -> None:
         if state in self._icons:

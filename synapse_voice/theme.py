@@ -129,6 +129,20 @@ QPushButton {
 QPushButton:hover { background-color: #293548; border-color: #475569; }
 QPushButton:pressed { background-color: #0f172a; }
 QPushButton:disabled { color: #475569; }
+QMenu {
+    background-color: #1e293b;
+    color: #e2e8f0;
+    border: 1px solid #334155;
+    padding: 4px 0;
+}
+QMenu::item {
+    background-color: transparent;
+    color: #e2e8f0;
+    padding: 6px 22px 6px 18px;
+}
+QMenu::item:selected { background-color: #06b6d4; color: #0f172a; }
+QMenu::item:disabled { color: #64748b; }
+QMenu::separator { height: 1px; background-color: #334155; margin: 4px 8px; }
 """
 
 _LIGHT_QSS = """
@@ -173,4 +187,18 @@ QPushButton {
 QPushButton:hover { background-color: #f1f5f9; border-color: #94a3b8; }
 QPushButton:pressed { background-color: #e2e8f0; }
 QPushButton:disabled { color: #cbd5e1; }
+QMenu {
+    background-color: #ffffff;
+    color: #0f172a;
+    border: 1px solid #cbd5e1;
+    padding: 4px 0;
+}
+QMenu::item {
+    background-color: transparent;
+    color: #0f172a;
+    padding: 6px 22px 6px 18px;
+}
+QMenu::item:selected { background-color: #06b6d4; color: #ffffff; }
+QMenu::item:disabled { color: #94a3b8; }
+QMenu::separator { height: 1px; background-color: #cbd5e1; margin: 4px 8px; }
 """

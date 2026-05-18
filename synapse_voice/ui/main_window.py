@@ -619,6 +619,15 @@ class MainWindow(QMainWindow):
         self._detail_layout.addWidget(chip, 0, Qt.AlignmentFlag.AlignVCenter)
 
     def _build_cloud_detail(self) -> None:
+        # v0.9.14: cloud detail is now two rows — provider row on top,
+        # Mode toggle on its own row below (TJ feedback: the Mode toggle
+        # sandwiched between title + chip was visually orphaned).
+        container = QVBoxLayout()
+        container.setSpacing(10)
+
+        provider_row = QHBoxLayout()
+        provider_row.setSpacing(12)
+
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
         t = QLabel("Cloud provider")
@@ -627,16 +636,7 @@ class MainWindow(QMainWindow):
         sub = QLabel("Routed to your chosen API")
         sub.setObjectName("dim")
         title_box.addWidget(sub)
-        self._detail_layout.addLayout(title_box, 1)
-
-        # 2026-05-16: Quality vs Fast toggle. Quality = large-v3-turbo
-        # (the current default, best accuracy). Fast = distil-large-v3
-        # for instant-paste feel on hotkey release. Only renders for
-        # the Subunit cloud provider — Groq/OpenAI/Custom use their own
-        # model selection.
-        if self.config.mode == "subunit":
-            quality_box = self._build_quality_toggle()
-            self._detail_layout.addLayout(quality_box, 0)
+        provider_row.addLayout(title_box, 1)
 
         cur = self.config.mode
         chip_label = mode_label(cur).split("·")[0].strip()
@@ -645,30 +645,51 @@ class MainWindow(QMainWindow):
         chip.setMinimumWidth(180)
         chip.setCursor(Qt.CursorShape.PointingHandCursor)
         chip.clicked.connect(lambda: self._popup_cloud_menu(chip))
-        self._detail_layout.addWidget(chip, 0, Qt.AlignmentFlag.AlignVCenter)
+        provider_row.addWidget(chip, 0, Qt.AlignmentFlag.AlignVCenter)
 
-    def _build_quality_toggle(self) -> QVBoxLayout:
+        container.addLayout(provider_row)
+
+        # Mode toggle — only meaningful for Subunit cloud (the other
+        # providers expose their own model selection in Settings).
+        # Lives in its own row so it reads as a dedicated Cloud setting,
+        # not a sub-control of the provider picker.
+        if self.config.mode == "subunit":
+            container.addLayout(self._build_quality_toggle_row())
+
+        self._detail_layout.addLayout(container, 1)
+
+    def _build_quality_toggle_row(self) -> QHBoxLayout:
+        """Horizontal Mode row: [Mode  description]   [AUTO INSTANT FAST QUALITY]"""
+        row = QHBoxLayout()
+        row.setSpacing(12)
+
+        label_box = QVBoxLayout()
+        label_box.setSpacing(2)
+        lbl = QLabel("Mode")
+        lbl.setObjectName("h2")
+        label_box.addWidget(lbl)
+        sub = QLabel("Quality vs speed — Auto routes by clip length")
+        sub.setObjectName("dim")
+        label_box.addWidget(sub)
+        row.addLayout(label_box, 1)
+        row.addLayout(self._build_quality_toggle(), 0)
+        return row
+
+    def _build_quality_toggle(self) -> QHBoxLayout:
         """Four-pill segmented control: AUTO | INSTANT | FAST | QUALITY.
 
         v0.9.7: added Auto.
         v0.9.9: added Instant tier (base model, ~12x faster than turbo).
         Server-side Auto routing: <5s → Instant, 5-20s → Fast, ≥20s → Quality.
-        Auto is the default — fits short, snappy dictations AND long
-        accurate meetings without the user toggling.
+        v0.9.14: default reverted to QUALITY (Auto's instant tier degraded
+        accuracy on short German dictations — Auto stays opt-in).
         """
         from PyQt6.QtWidgets import QButtonGroup
-
-        col = QVBoxLayout()
-        col.setSpacing(4)
-        lbl = QLabel("Mode")
-        lbl.setObjectName("dim")
-        lbl.setStyleSheet(f"color: {WHITE_DIM}; font-size: 11px; letter-spacing: 1px;")
-        col.addWidget(lbl)
 
         row = QHBoxLayout()
         row.setSpacing(0)
 
-        current = (getattr(self.config, "cloud_quality_mode", "auto") or "auto").lower()
+        current = (getattr(self.config, "cloud_quality_mode", "quality") or "quality").lower()
         group = QButtonGroup(self)
         group.setExclusive(True)
         for value, label in (
@@ -688,8 +709,7 @@ class MainWindow(QMainWindow):
             b.clicked.connect(lambda _=False, v=value: self._on_quality_mode_changed(v))
             group.addButton(b)
             row.addWidget(b)
-        col.addLayout(row)
-        return col
+        return row
 
     def _on_quality_mode_changed(self, value: str) -> None:
         if value not in ("auto", "instant", "fast", "quality"):
