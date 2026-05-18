@@ -40,7 +40,7 @@ DEFAULT_VOCABULARY: list[dict] = [
     {"sounds_like": "Whisper",   "write_as": "Whisper",
      "aliases": ["Wisper", "Visper"], "category": "Tech"},
     {"sounds_like": "Klaud",     "write_as": "Claude",
-     "aliases": ["Cloud" "Klod", "Klode"], "category": "Tech"},
+     "aliases": ["Klod", "Klode"], "category": "Tech"},
     {"sounds_like": "Antropik",  "write_as": "Anthropic",
      "aliases": ["Antrobik"], "category": "Company"},
     {"sounds_like": "Open-AI",   "write_as": "OpenAI",
