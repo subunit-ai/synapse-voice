@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import signal
 import sys
+import threading
 import traceback
 from datetime import datetime, timezone
 from typing import Optional
@@ -590,14 +591,36 @@ class SynapseVoiceApp(QObject):
             self._prompt_for_credentials(missing)
             return
 
-        self.target = capture_active_window() if self.config.target_lock else None
+        # v0.10.6: start audio capture IMMEDIATELY, defer the active-window
+        # snapshot to a background thread. capture_active_window() on Win11
+        # ARM64 + Linux blocks 200–1000ms (xdotool subprocess /
+        # GetGUIThreadInfo) which used to push the user-perceived hotkey
+        # latency to 1–2s. The target is only needed at paste-back time
+        # ~3–10s later, so capturing it in parallel is safe.
+        self.target = None
         try:
             self.recorder.start()
-            _log.info("Recording started (target=%s)", self.target.title if self.target else None)
         except Exception as e:
             _log.exception("Mic error on start")
             self._show_error(f"Mic error: {e}")
             return
+
+        if self.config.target_lock:
+            def _grab_target():
+                try:
+                    snapped = capture_active_window()
+                    self.target = snapped
+                    _log.info(
+                        "Recording started (target=%s)",
+                        snapped.title if snapped else None,
+                    )
+                except Exception:
+                    _log.exception("capture_active_window failed (non-fatal)")
+
+            threading.Thread(target=_grab_target, daemon=True).start()
+        else:
+            _log.info("Recording started (target=None, target_lock off)")
+
         title = self.target.title if self.target else "no target"
         self.tray.set_state("recording", f"recording → {title}")
         self._safe_status("recording", color="#ff585c")

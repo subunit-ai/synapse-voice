@@ -76,12 +76,18 @@ class Recorder:
             return
         with self._lock:
             self._chunks = []
+        # blocksize=512 (32ms @ 16kHz) keeps first-callback latency low;
+        # without this, sounddevice picks a host-default that can sit at
+        # 128–256ms before the first audio frame arrives. latency='low'
+        # asks WASAPI/CoreAudio/ALSA for their shortest hardware buffer.
         self._stream = sd.InputStream(
             samplerate=self.sample_rate,
             channels=1,
             dtype="float32",
             callback=self._callback,
             device=self.device,
+            blocksize=512,
+            latency="low",
         )
         self._stream.start()
         self._recording = True
