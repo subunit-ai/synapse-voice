@@ -1591,27 +1591,52 @@ class SettingsDialog(QDialog):
 
         result_box: list = []
 
-        def fetch() -> None:
+        def _do_get(bearer: str, key: str) -> dict:
             import urllib.error, urllib.request, json as _json
             endpoint = (getattr(self.config, "subunit_endpoint", "") or "https://transcribe.subunit.ai").rstrip("/")
             url = endpoint + "/v1/account/info"
-            headers = {}
-            if access:
-                headers["Authorization"] = "Bearer " + access
-            elif api_key:
-                headers["X-API-Key"] = api_key
+            hdrs: dict[str, str] = {}
+            if bearer:
+                hdrs["Authorization"] = "Bearer " + bearer
+            elif key:
+                hdrs["X-API-Key"] = key
             try:
-                req = urllib.request.Request(url, method="GET", headers=headers)
+                req = urllib.request.Request(url, method="GET", headers=hdrs)
                 with urllib.request.urlopen(req, timeout=8) as resp:
-                    result_box.append(_json.loads(resp.read().decode("utf-8")))
+                    return _json.loads(resp.read().decode("utf-8"))
             except urllib.error.HTTPError as exc:
                 try:
                     body = _json.loads(exc.read().decode("utf-8"))
                 except Exception:
                     body = {"detail": str(exc)}
-                result_box.append({"_error": True, "status": exc.code, "body": body})
+                return {"_error": True, "status": exc.code, "body": body}
             except Exception as exc:
-                result_box.append({"_error": True, "message": str(exc)})
+                return {"_error": True, "message": str(exc)}
+
+        def fetch() -> None:
+            r = _do_get(access, api_key)
+            # v0.10.8: on 401, try refreshing the access_token via the stored
+            # refresh_token, then retry once. Before, an expired token left
+            # the panel in "Sitzung abgelaufen" state until the user clicked
+            # "Erneut anmelden" — even though we have a valid refresh_token
+            # sitting in config. Self-heal so the UI just works.
+            if r.get("_error") and r.get("status") == 401 and access:
+                refresh = (getattr(self.config, "subunit_refresh_token", "") or "").strip()
+                if refresh:
+                    try:
+                        from ..subunit_auth import refresh_tokens
+                        new_t = refresh_tokens(refresh)
+                        if new_t and new_t.access_token:
+                            self.config.subunit_access_token = new_t.access_token
+                            if new_t.refresh_token:
+                                self.config.subunit_refresh_token = new_t.refresh_token
+                            self.config.save()
+                            r = _do_get(new_t.access_token, "")
+                    except Exception:
+                        pass  # fall through to the 401 error display
+            result_box.append(r)
+
+        threading.Thread(target=fetch, name="sonar-profile-fetch", daemon=True).start()
 
         threading.Thread(target=fetch, name="sonar-profile-fetch", daemon=True).start()
 
@@ -1621,9 +1646,32 @@ class SettingsDialog(QDialog):
                 return
             r = result_box[0]
             if r.get("_error"):
-                self.profile_email_val.setText("Fehler beim Laden")
-                self.profile_plan_badge.setText("?")
-                self.profile_access_val.setText("Server nicht erreichbar")
+                # v0.10.8: differentiate auth-expired (401) from network errors.
+                # Before, every error showed "Server nicht erreichbar" even
+                # when the actual problem was "your token expired, please
+                # re-login" — leaving the user confused why the green
+                # "Angemeldet als..." badge says they're logged in but the
+                # plan card is broken.
+                status = r.get("status")
+                msg = r.get("message", "")
+                if status == 401:
+                    self.profile_email_val.setText("Sitzung abgelaufen")
+                    self.profile_plan_badge.setText("?")
+                    self.profile_access_val.setText("Bitte „Erneut anmelden“ oben")
+                elif status == 403:
+                    self.profile_email_val.setText("Zugriff verweigert")
+                    self.profile_plan_badge.setText("?")
+                    self.profile_access_val.setText("Account hat keine Berechtigung")
+                elif status:
+                    self.profile_email_val.setText(f"Server-Fehler ({status})")
+                    self.profile_plan_badge.setText("?")
+                    self.profile_access_val.setText("Versuche es später erneut")
+                else:
+                    self.profile_email_val.setText("Server nicht erreichbar")
+                    self.profile_plan_badge.setText("?")
+                    self.profile_access_val.setText(
+                        msg[:60] if msg else "Netzwerk-Verbindung prüfen"
+                    )
                 return
             email = (r.get("email") or "").strip() or "—"
             plan = (r.get("plan") or "free").lower()

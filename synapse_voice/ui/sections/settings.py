@@ -161,6 +161,17 @@ class SettingsSection(QWidget):
                 # Re-parent so removing from the tab widget doesn't
                 # delete it; the stack now owns it.
                 w.setParent(None)
+                # v0.10.8: re-apply the dark stylesheet to the lifted
+                # panel. DARK_QSS was originally scoped on the SettingsDialog
+                # via `QDialog` selector; once we lift a child widget out
+                # of that QDialog parent the cascade breaks and the panel
+                # falls back to system theme (= white on Win11). We give
+                # the panel objectName "tabPage" so the existing
+                # `QWidget#tabPage` selector in DARK_QSS matches and
+                # paints it NIGHT + applies all child rules.
+                from ..settings import DARK_QSS
+                w.setObjectName("tabPage")
+                w.setStyleSheet(DARK_QSS)
                 return w
         return None
 
