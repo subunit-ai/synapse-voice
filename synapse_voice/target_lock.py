@@ -679,14 +679,30 @@ def _win_paste_keystroke() -> bool:
         e.ki.dwExtraInfo = None
         return e
 
-    seq = (INPUT * 4)(
-        make(VK_CONTROL, sc_ctrl, False),
-        make(VK_V, sc_v, False),
-        make(VK_V, sc_v, True),
-        make(VK_CONTROL, sc_ctrl, True),
-    )
+    # v0.10.7 (TJ-report 2026-05-19): even with scancodes, the bug "manchmal
+    # nur V gepastet" still reappears occasionally on Win-on-ARM. Theory:
+    # batching all 4 events into a single SendInput call lets the ARM
+    # emulator process Ctrl-down and V-down in the SAME event-pump tick,
+    # which can collapse Ctrl into a "pending modifier" state that
+    # never reaches the target app before V lands.
+    #
+    # Fix: split into 3 separate SendInput calls with a tiny sleep
+    # between each. This forces the OS to flush Ctrl-down through the
+    # full input pipeline (incl. ARM-emulator boundary) before V arrives.
+    # 5ms is below user-perception (< 1 frame at 144Hz) but enough for
+    # the kernel to settle.
+    import time as _time
+
+    seq1 = (INPUT * 1)(make(VK_CONTROL, sc_ctrl, False))           # Ctrl-down
+    seq2 = (INPUT * 2)(make(VK_V, sc_v, False), make(VK_V, sc_v, True))  # V down+up
+    seq3 = (INPUT * 1)(make(VK_CONTROL, sc_ctrl, True))            # Ctrl-up
     cb = ctypes.sizeof(INPUT)
-    sent = user32.SendInput(4, seq, cb)
+    s1 = user32.SendInput(1, seq1, cb)
+    _time.sleep(0.005)
+    s2 = user32.SendInput(2, seq2, cb)
+    _time.sleep(0.005)
+    s3 = user32.SendInput(1, seq3, cb)
+    sent = s1 + s2 + s3
     if sent != 4:
         # GetLastError straight from kernel32 — ctypes.get_last_error() only
         # works if the DLL was opened with use_last_error=True (we use
