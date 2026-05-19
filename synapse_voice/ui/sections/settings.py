@@ -31,12 +31,19 @@ WHITE_DIM = "#94a3b8"
 SURFACE = "#1e293b"
 
 
-# Sub-tab definitions: (key, label, dialog-build-method-name)
+# Sub-tab definitions: (key, label_de, dialog_tab_label_en)
+# v0.10.9: label_de is the German label shown in the Hub sub-tab strip,
+# dialog_tab_label_en is the English label SettingsDialog uses in
+# `tabs.addTab(..., "<label>")` — they're separate because the legacy
+# dialog wasn't localized. Before v0.10.9 we matched on the German
+# label, which silently failed for General/Allgemein +
+# Transcription/Transkription (no case-insensitive match exists between
+# DE+EN) — Erik saw "[Allgemein] Panel nicht verfügbar".
 SUBTABS: list[tuple[str, str, str]] = [
-    ("general",       "Allgemein",     "_build_general_tab"),
-    ("transcription", "Transkription", "_build_transcription_tab"),
-    ("overlay",       "Overlay",       "_build_overlay_tab"),
-    ("account",       "Account",       "_build_account_tab"),
+    ("general",       "Allgemein",     "General"),
+    ("transcription", "Transkription", "Transcription"),
+    ("overlay",       "Overlay",       "Overlay"),
+    ("account",       "Account",       "Account"),
 ]
 
 
@@ -91,8 +98,8 @@ class SettingsSection(QWidget):
         tab_row = QHBoxLayout()
         tab_row.setSpacing(0)
         self._tab_buttons: dict[str, _SubTabButton] = {}
-        for key, label, _build in SUBTABS:
-            btn = _SubTabButton(label)
+        for key, label_de, _dialog_label in SUBTABS:
+            btn = _SubTabButton(label_de)
             btn.clicked.connect(lambda _checked=False, k=key: self._select(k))
             self._tab_buttons[key] = btn
             tab_row.addWidget(btn)
@@ -113,13 +120,13 @@ class SettingsSection(QWidget):
 
         # Populate the stack with the panels we need. The dialog's
         # `tabs` attribute is the QTabWidget; we walk its children and
-        # match by index using the tab labels we already know.
-        for key, label, _build in SUBTABS:
-            panel = self._lift_panel_by_label(label)
+        # match by the ENGLISH dialog-tab label (3rd tuple element).
+        for key, label_de, dialog_label in SUBTABS:
+            panel = self._lift_panel_by_label(dialog_label)
             if panel is None:
                 # Fallback — tiny missing-panel placeholder so the user
                 # never lands on a blank screen.
-                panel = QLabel(f"[{label}] Panel nicht verfügbar.")
+                panel = QLabel(f"[{label_de}] Panel nicht verfügbar.")
                 panel.setStyleSheet(f"color: {WHITE_DIM}; padding: 24px;")
             self._content.addWidget(panel)
 

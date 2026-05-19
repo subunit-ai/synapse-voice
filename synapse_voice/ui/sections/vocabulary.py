@@ -95,6 +95,12 @@ class VocabularySection(QWidget):
             if tabs.tabText(i).strip().lower() == label.lower():
                 w = tabs.widget(i)
                 w.setParent(None)
+                # v0.10.9: same dark-mode fix as SettingsSection — re-apply
+                # DARK_QSS to the lifted widget so it doesn't fall back to
+                # system white on Win11.
+                from ..settings import DARK_QSS
+                w.setObjectName("tabPage")
+                w.setStyleSheet(DARK_QSS)
                 return w
         return None
 
